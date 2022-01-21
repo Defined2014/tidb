@@ -425,7 +425,7 @@ func (d *ddl) PollTiFlashRoutine() {
 				if d.ownerManager.IsOwner() {
 					_, err := d.pollTiFlashReplicaStatus(sctx, pollTiflashContext)
 					if err != nil {
-						logutil.BgLogger().Warn("pollTiFlashReplicaStatus returns error", zap.Error(err))
+						// logutil.BgLogger().Warn("pollTiFlashReplicaStatus returns error", zap.Error(err))
 					}
 				}
 				d.sessPool.put(sctx)

@@ -95,6 +95,7 @@ const (
 	ActionAlterTableStatsOptions        ActionType = 58
 	ActionAlterNoCacheTable             ActionType = 59
 	ActionCreateTables                  ActionType = 60
+	ActionMultiSchemaChange             ActionType = 61
 )
 
 var actionMap = map[ActionType]string{
@@ -102,6 +103,7 @@ var actionMap = map[ActionType]string{
 	ActionDropSchema:                    "drop schema",
 	ActionCreateTable:                   "create table",
 	ActionCreateTables:                  "create tables",
+	ActionMultiSchemaChange:             "multi schema change",
 	ActionDropTable:                     "drop table",
 	ActionAddColumn:                     "add column",
 	ActionDropColumn:                    "drop column",

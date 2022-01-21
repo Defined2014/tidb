@@ -2739,22 +2739,15 @@ func (d *ddl) AlterTable(ctx context.Context, sctx sessionctx.Context, ident ast
 		return ErrWrongObject.GenWithStackByArgs(ident.Schema, ident.Name, "BASE TABLE")
 	}
 
-	err = checkMultiSpecs(sctx, validSpecs)
-	if err != nil {
-		return err
-	}
+	/*
+		err = checkMultiSpecs(sctx, validSpecs)
+		if err != nil {
+			return err
+		}
+	*/
 
 	if len(validSpecs) > 1 {
-		switch validSpecs[0].Tp {
-		case ast.AlterTableAddColumns:
-			err = d.AddColumns(sctx, ident, validSpecs)
-		case ast.AlterTableDropColumn:
-			err = d.DropColumns(sctx, ident, validSpecs)
-		case ast.AlterTableDropPrimaryKey, ast.AlterTableDropIndex:
-			err = d.DropIndexes(sctx, ident, validSpecs)
-		default:
-			return errRunMultiSchemaChanges
-		}
+		err = d.MultiSchemaChange(sctx, ident, validSpecs)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -3719,6 +3712,49 @@ func (d *ddl) DropColumn(ctx sessionctx.Context, ti ast.Ident, spec *ast.AlterTa
 	if ErrCantDropFieldOrKey.Equal(err) && spec.IfExists {
 		ctx.GetSessionVars().StmtCtx.AppendNote(err)
 		return nil
+	}
+	err = d.callHookOnChanged(err)
+	return errors.Trace(err)
+}
+
+func (d *ddl) MultiSchemaChange(ctx sessionctx.Context, ti ast.Ident, specs []*ast.AlterTableSpec) error {
+	schema, t, err := d.getSchemaAndTableByIdent(ctx, ti)
+	if err != nil {
+		return err
+	}
+
+	var multiSchemaInfo *model.MultiSchemaInfo
+	if ctx.GetSessionVars().EnableChangeMultiSchema {
+		multiSchemaInfo = &model.MultiSchemaInfo{}
+	}
+
+	colNames := make([]model.CIStr, 0, len(specs))
+	ddlType := make([]ast.AlterTableType, 0, len(specs))
+
+	for _, spec := range specs {
+		if spec.Tp == ast.AlterTableAddColumns {
+			for _, specNewColumn := range spec.NewColumns {
+				colNames = append(colNames, specNewColumn.Name.Name)
+			}
+		} else {
+			colNames = append(colNames, spec.OldColumnName.Name)
+		}
+		ddlType = append(ddlType, spec.Tp)
+	}
+
+	job := &model.Job{
+		SchemaID:        schema.ID,
+		TableID:         t.Meta().ID,
+		SchemaName:      schema.Name.L,
+		Type:            model.ActionMultiSchemaChange,
+		BinlogInfo:      &model.HistoryInfo{},
+		MultiSchemaInfo: multiSchemaInfo,
+		Args:            []interface{}{0, colNames, ddlType},
+	}
+
+	err = d.doDDLJob(ctx, job)
+	if err != nil {
+		return errors.Trace(err)
 	}
 	err = d.callHookOnChanged(err)
 	return errors.Trace(err)

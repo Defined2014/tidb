@@ -420,6 +420,86 @@ func onAddColumns(d *ddlCtx, t *meta.Meta, job *model.Job) (ver int64, err error
 	return ver, errors.Trace(err)
 }
 
+func onMultiSchemaChange(d *ddlCtx, t *meta.Meta, job *model.Job) (ver int64, _ error) {
+	schemaID := job.SchemaID
+	tblInfo, err := getTableInfoAndCancelFaultJob(t, job, schemaID)
+	if err != nil {
+		job.State = model.JobStateCancelled
+		return ver, nil
+	}
+
+	var colNames []model.CIStr
+	var ddlType []ast.AlterTableType
+	var count int
+	err = job.DecodeArgs(&count, &colNames, &ddlType)
+	if err != nil {
+		job.State = model.JobStateCancelled
+		return ver, nil
+	}
+
+	for i, colName := range colNames {
+		if ddlType[i] == ast.AlterTableAddColumns {
+		} else {
+			colInfo := model.FindColumnInfo(tblInfo.Columns, colName.L)
+			if colInfo != nil {
+				originalState := colInfo.State
+				switch colInfo.State {
+				case model.StatePublic:
+					// public -> write only
+					colInfo.State = model.StateWriteOnly
+					err = checkDropColumnForStatePublic(tblInfo, colInfo)
+					if err != nil {
+						return ver, errors.Trace(err)
+					}
+					ver, err = updateVersionAndTableInfoWithCheck(t, job, tblInfo, originalState != colInfo.State)
+					if err != nil {
+						return ver, errors.Trace(err)
+					}
+					job.SchemaState = model.StateWriteOnly
+				case model.StateWriteOnly:
+					// write only -> delete only
+					colInfo.State = model.StateDeleteOnly
+					ver, err = updateVersionAndTableInfo(t, job, tblInfo, originalState != colInfo.State)
+					if err != nil {
+						return ver, errors.Trace(err)
+					}
+					job.SchemaState = model.StateDeleteOnly
+				case model.StateDeleteOnly:
+					// delete only -> reorganization
+					colInfo.State = model.StateDeleteReorganization
+					ver, err = updateVersionAndTableInfo(t, job, tblInfo, originalState != colInfo.State)
+					if err != nil {
+						return ver, errors.Trace(err)
+					}
+					job.SchemaState = model.StateDeleteReorganization
+				case model.StateDeleteReorganization:
+					for j, c := range tblInfo.Columns {
+						if c.Name.L == colName.L {
+							tblInfo.Columns = append(tblInfo.Columns[:j], tblInfo.Columns[j+1:]...)
+							count++
+							break
+						}
+					}
+					colInfo.State = model.StateNone
+					ver, err = updateVersionAndTableInfo(t, job, tblInfo, originalState != colInfo.State)
+					if err != nil {
+						return ver, errors.Trace(err)
+					}
+
+					// Finish this job.
+					if count == len(colNames) {
+						job.FinishTableJob(model.JobStateDone, model.StateNone, ver, tblInfo)
+					}
+				default:
+					err = errInvalidDDLJob.GenWithStackByArgs("table", tblInfo.State)
+				}
+			}
+		}
+	}
+
+	return 0, nil
+}
+
 func onDropColumns(t *meta.Meta, job *model.Job) (ver int64, _ error) {
 	tblInfo, colInfos, delCount, idxInfos, err := checkDropColumns(t, job)
 	if err != nil {
