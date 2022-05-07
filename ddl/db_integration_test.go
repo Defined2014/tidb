@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/pingcap/failpoint"
 	"math"
 	"strconv"
 	"strings"
@@ -902,6 +903,20 @@ func TestChangingTableCharset(t *testing.T) {
 		// Column collate should remain unchanged.
 		require.Equal(t, "utf8_unicode_ci", col.GetCollate())
 	}
+
+	require.NoError(t, failpoint.Enable("github.com/pingcap/tidb/parser/charset/latin1EnableInvalidCharacter", "return(true)"))
+	tk.MustExec("drop table t")
+	tk.MustExec("create table t (a varchar(20)) charset = latin1")
+	tk.MustExec("insert into t values (0x90)")
+	tk.MustGetErrCode("alter table t convert to charset utf8", errno.ErrTruncatedWrongValueForField)
+
+	tk.MustExec("set sql_mode=''")
+	tk.MustExec("alter table t convert to charset utf8")
+	tk.MustQuery("show warnings;").Check(testkit.Rows("Warning 1366 Incorrect string value '\\x90' for column 'a'"))
+	tk.MustQuery("show create table t;").Check(testkit.Rows(
+		"t CREATE TABLE `t` (\n  `a` varchar(20) DEFAULT NULL\n) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_bin"))
+	tk.MustExec("set sql_mode=default")
+	require.NoError(t, failpoint.Disable("github.com/pingcap/tidb/parser/charset/latin1EnableInvalidCharacter"))
 }
 
 func TestModifyColumnOption(t *testing.T) {
