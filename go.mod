@@ -63,7 +63,7 @@ require (
 	github.com/stretchr/testify v1.7.2-0.20220504104629-106ec21d14df
 	github.com/tiancaiamao/appdash v0.0.0-20181126055449-889f96f722a2
 	github.com/tikv/client-go/v2 v2.0.1-0.20220721031657-e38d2b07de3f
-	github.com/tikv/pd/client v0.0.0-20220307081149-841fa61e9710
+	github.com/tikv/pd/client v0.0.0-20220725055910-7187a7ab72db
 	github.com/twmb/murmur3 v1.1.3
 	github.com/uber/jaeger-client-go v2.22.1+incompatible
 	github.com/wangjohn/quickselect v0.0.0-20161129230411-ed8402a42d5f
@@ -235,6 +235,8 @@ require (
 	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
 	sigs.k8s.io/yaml v1.2.0 // indirect
 )
+
+replace github.com/tikv/client-go/v2 => github.com/defined2014/client-go/v2 v2.0.1-0.20220725063006-0b9f0ba2e664
 
 replace github.com/pingcap/tidb/parser => ./parser
 
