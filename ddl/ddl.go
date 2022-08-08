@@ -83,6 +83,8 @@ const (
 
 	reorgWorkerCnt   = 10
 	generalWorkerCnt = 1
+
+	backfillWorkCnt = 20
 )
 
 // OnExist specifies what to do when a new object has a name collision.
@@ -313,6 +315,8 @@ type ddlCtx struct {
 	}
 
 	waiting *atomicutil.Bool
+
+	backfillWorkerPool *backfillWorkerPool
 }
 
 // schemaVersionManager is used to manage the schema version. To prevent the conflicts on this key between different DDL job,
@@ -549,6 +553,14 @@ func newDDL(ctx context.Context, options ...Option) *ddl {
 		schemaVersionManager:       newSchemaVersionManager(),
 		waitSchemaSyncedController: newWaitSchemaSyncedController(),
 		runningJobIDs:              make([]string, 0, jobRecordCapacity),
+		backfillWorkerPool: newBackfillWorkerPool(
+			pools.NewResourcePool(func() (pools.Resource, error) {
+				return &backfillWorker{
+					priority: kv.PriorityLow,
+					taskCh:   make(chan *reorgBackfillTask, 1),
+					resultCh: make(chan *backfillResult, 1),
+				}, nil
+			}, backfillWorkCnt, backfillWorkCnt, 0)),
 	}
 	ddlCtx.reorgCtx.reorgCtxMap = make(map[int64]*reorgCtx)
 	ddlCtx.jobCtx.jobCtxMap = make(map[int64]*JobContext)

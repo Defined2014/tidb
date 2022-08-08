@@ -178,6 +178,7 @@ func (w *backfillWorker) Close() {
 func closeBackfillWorkers(workers []*backfillWorker) {
 	for _, worker := range workers {
 		worker.Close()
+		worker.reorgInfo.d.backfillWorkerPool.put(worker)
 	}
 }
 
@@ -656,19 +657,25 @@ func (w *worker) writePhysicalTableRecord(t table.PhysicalTable, bfWorkerType ba
 			switch bfWorkerType {
 			case typeAddIndexWorker:
 				idxWorker := newAddIndexWorker(sessCtx, i, t, indexInfo, decodeColMap, reorgInfo, jc)
-				idxWorker.priority = job.Priority
+				if idxWorker == nil {
+					break
+				}
 				backfillWorkers = append(backfillWorkers, idxWorker.backfillWorker)
 				go idxWorker.backfillWorker.run(reorgInfo.d, idxWorker, job)
 			case typeUpdateColumnWorker:
 				// Setting InCreateOrAlterStmt tells the difference between SELECT casting and ALTER COLUMN casting.
 				sessCtx.GetSessionVars().StmtCtx.InCreateOrAlterStmt = true
 				updateWorker := newUpdateColumnWorker(sessCtx, i, t, oldColInfo, colInfo, decodeColMap, reorgInfo, jc)
-				updateWorker.priority = job.Priority
+				if updateWorker == nil {
+					break
+				}
 				backfillWorkers = append(backfillWorkers, updateWorker.backfillWorker)
 				go updateWorker.backfillWorker.run(reorgInfo.d, updateWorker, job)
 			case typeCleanUpIndexWorker:
 				idxWorker := newCleanUpIndexWorker(sessCtx, i, t, decodeColMap, reorgInfo, jc)
-				idxWorker.priority = job.Priority
+				if idxWorker == nil {
+					break
+				}
 				backfillWorkers = append(backfillWorkers, idxWorker.backfillWorker)
 				go idxWorker.backfillWorker.run(reorgInfo.d, idxWorker, job)
 			default:
@@ -700,6 +707,11 @@ func (w *worker) writePhysicalTableRecord(t table.PhysicalTable, bfWorkerType ba
 				}
 			}
 		})
+
+		if len(backfillWorkers) == 0 {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
 
 		logutil.BgLogger().Info("[ddl] start backfill workers to reorg record",
 			zap.Int("workerCnt", len(backfillWorkers)),

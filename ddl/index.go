@@ -1011,9 +1011,13 @@ type addIndexWorker struct {
 func newAddIndexWorker(sessCtx sessionctx.Context, id int, t table.PhysicalTable, indexInfo *model.IndexInfo, decodeColMap map[int64]decoder.Column, reorgInfo *reorgInfo, jc *JobContext) *addIndexWorker {
 	index := tables.NewIndex(t.GetPhysicalID(), t.Meta(), indexInfo)
 	rowDecoder := decoder.NewRowDecoder(t, t.WritableCols(), decodeColMap)
+	backfillWorker, err := reorgInfo.d.backfillWorkerPool.get(sessCtx, id, t, reorgInfo)
+	if err != nil || backfillWorker == nil {
+		return nil
+	}
 	return &addIndexWorker{
 		baseIndexWorker: baseIndexWorker{
-			backfillWorker: newBackfillWorker(sessCtx, id, t, reorgInfo),
+			backfillWorker: backfillWorker,
 			indexes:        []table.Index{index},
 			rowDecoder:     rowDecoder,
 			defaultVals:    make([]types.Datum, len(t.WritableCols())),
@@ -1467,9 +1471,13 @@ func newCleanUpIndexWorker(sessCtx sessionctx.Context, id int, t table.PhysicalT
 			indexes = append(indexes, index)
 		}
 	}
+	backfillWorker, err := reorgInfo.d.backfillWorkerPool.get(sessCtx, id, t, reorgInfo)
+	if err != nil || backfillWorker == nil {
+		return nil
+	}
 	return &cleanUpIndexWorker{
 		baseIndexWorker: baseIndexWorker{
-			backfillWorker: newBackfillWorker(sessCtx, id, t, reorgInfo),
+			backfillWorker: backfillWorker,
 			indexes:        indexes,
 			rowDecoder:     rowDecoder,
 			defaultVals:    make([]types.Datum, len(t.WritableCols())),
