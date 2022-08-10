@@ -39,6 +39,7 @@ import (
 
 var (
 	addingDDLJobConcurrent = "/tidb/ddl/add_ddl_job_general"
+	addingBackfillJob      = "/tidb/ddl/add_backfill_job"
 )
 
 func (dc *ddlCtx) insertRunningDDLJobMap(id int64) {
@@ -148,6 +149,53 @@ func (d *ddl) getReorgJob(sess *session) (*model.Job, error) {
 			strconv.Quote(strconv.FormatInt(job.SchemaID, 10)), model.ActionDropSchema, strconv.Quote(strconv.FormatInt(job.TableID, 10)))
 		return d.checkJobIsRunnable(sess, sql)
 	})
+}
+
+func (d *ddl) startBackfillLoop() {
+	se, err := d.sessPool.get()
+	if err != nil {
+		logutil.BgLogger().Fatal("backfill loop get session failed, it should not happen, please try restart TiDB", zap.Error(err))
+	}
+	defer d.sessPool.put(se)
+
+	sess := newSession(se)
+	var notifyDDLJobByEtcdCh clientv3.WatchChan
+	if d.etcdCli != nil {
+		notifyDDLJobByEtcdCh = d.etcdCli.Watch(d.ctx, addingBackfillJob)
+	}
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if isChanClosed(d.ctx.Done()) {
+			return
+		}
+		select {
+		case <-d.backfillJobCh:
+		case <-ticker.C:
+		case _, ok := <-notifyDDLJobByEtcdCh:
+			if !ok {
+				notifyDDLJobByEtcdCh = d.etcdCli.Watch(d.ctx, addingBackfillJob)
+				time.Sleep(500 * time.Millisecond)
+				continue
+			}
+		case <-d.ctx.Done():
+			return
+		}
+		rows, err := sess.execute(d.ctx, "select job_id, backfill_job_id from mysql.tidb_ddl_backfill_job where isnull(exec_id) order by job_id, backfill_job_id limit 1", "test")
+		if err != nil {
+			continue
+		}
+		for _, row := range rows {
+			jobID := row.GetInt64(0)
+			backfillID := row.GetInt64(1)
+			job, err := getJobsBySQL(sess, "tidb_ddl_job", fmt.Sprintf("job_id = %d", jobID))
+			if err != nil || len(job) != 1 {
+				continue
+			}
+			go d.finishBackfillJob(job[0], backfillID)
+		}
+	}
 }
 
 func (d *ddl) startDispatchLoop() {

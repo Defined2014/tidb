@@ -44,5 +44,5 @@ const (
 	// HistoryTableSQL is the CREATE TABLE SQL of `tidb_ddl_history`.
 	HistoryTableSQL = "create table " + HistoryTable + "(job_id bigint not null, job_meta longblob, db_name char(64), table_name char(64), schema_ids text(65535), table_ids text(65535), create_time datetime, primary key(job_id))"
 	// BackfillJobTableSQL is the CREATE TABLE SQL of `tidb_ddl_backfill_job`
-	BackfillJobTableSQL = "create table " + BackfillJobTable + "(backfill_job_id bigint not null, job_id bigint not null, type int not null, curr_key blob, start_key blob, end_key blob, endInclude bool, exec_id blob, exec_lease time, backfill_job_state int, row_count bigint, err_msg blob, primary key(job_id, backfill_job_id))"
+	BackfillJobTableSQL = "create table " + BackfillJobTable + "(backfill_job_id bigint not null, job_id bigint not null, type int not null, curr_key blob, start_key blob, end_key blob, endInclude bool, exec_id blob, exec_lease bigint, backfill_job_state int, row_count bigint unsigned, err_msg blob, primary key(job_id, backfill_job_id))"
 )

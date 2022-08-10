@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/pingcap/tidb/meta"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -598,8 +599,49 @@ func (w *worker) addBackfillJobToTable(t table.PhysicalTable, bfWorkerType backf
 			return err
 		}
 		sql.Reset()
+		asyncNotify(w.ddlCtx.backfillJobCh)
 	}
 	return nil
+}
+
+func (d *ddl) finishBackfillJob(job *model.Job, backfillID int64) {
+	se, err := d.sessPool.get()
+	if err != nil {
+		logutil.BgLogger().Fatal("backfill loop get session failed, it should not happen, please try restart TiDB", zap.Error(err))
+	}
+	defer d.sessPool.put(se)
+
+	sess := newSession(se)
+	ctx := kv.WithInternalSourceType(context.Background(), kv.InternalTxnDDL)
+	err = kv.RunInNewTxn(ctx, d.store, false, func(ctx context.Context, txn kv.Transaction) error {
+		sql := fmt.Sprintf("update mysql.tidb_ddl_backfill_job set exec_id = %s, exec_lease = %d where job_id = %d and backfill_job_id = %d",
+			strconv.Quote(d.uuid), txn.StartTS(), job.ID, backfillID)
+		_, err = sess.execute(d.ctx, sql, "update_backfill_job_exec_id")
+		if err != nil {
+			return err
+		}
+
+		t := meta.NewMeta(txn)
+		tblInfo, err := GetTableInfoAndCancelFaultJob(t, job, job.SchemaID)
+		if err != nil {
+			return errors.Trace(err)
+		}
+
+		bl, err := getTable(d.store, job.SchemaID, tblInfo)
+		if err != nil {
+			return errors.Trace(err)
+		}
+
+		sessCtx := newContext(d.store)
+		decodeColMap, err := makeupDecodeColMap(sessCtx, bl.(table.PhysicalTable))
+		idxWorker := newAddIndexWorker(sessCtx, int(backfillID), bl.(table.PhysicalTable), indexInfo, decodeColMap, reorgInfo, NewJobContext())
+
+		return nil
+	})
+
+	idxWorker.priority = job.Priority
+	backfillWorkers = append(backfillWorkers, idxWorker.backfillWorker)
+	idxWorker.backfillWorker.run(reorgInfo.d, idxWorker, job)
 }
 
 // writePhysicalTableRecord handles the "add index" or "modify/change column" reorganization state for a non-partitioned table or a partition.

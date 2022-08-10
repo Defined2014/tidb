@@ -263,20 +263,21 @@ func (w *waitSchemaSyncedController) synced(job *model.Job) {
 
 // ddlCtx is the context when we use worker to handle DDL jobs.
 type ddlCtx struct {
-	ctx          context.Context
-	cancel       context.CancelFunc
-	uuid         string
-	store        kv.Storage
-	ownerManager owner.Manager
-	schemaSyncer util.SchemaSyncer
-	ddlJobDoneCh chan struct{}
-	ddlEventCh   chan<- *util.Event
-	lease        time.Duration        // lease is schema lease.
-	binlogCli    *pumpcli.PumpsClient // binlogCli is used for Binlog.
-	infoCache    *infoschema.InfoCache
-	statsHandle  *handle.Handle
-	tableLockCkr util.DeadTableLockChecker
-	etcdCli      *clientv3.Client
+	ctx           context.Context
+	cancel        context.CancelFunc
+	uuid          string
+	store         kv.Storage
+	ownerManager  owner.Manager
+	schemaSyncer  util.SchemaSyncer
+	ddlJobDoneCh  chan struct{}
+	ddlEventCh    chan<- *util.Event
+	lease         time.Duration        // lease is schema lease.
+	binlogCli     *pumpcli.PumpsClient // binlogCli is used for Binlog.
+	infoCache     *infoschema.InfoCache
+	statsHandle   *handle.Handle
+	tableLockCkr  util.DeadTableLockChecker
+	etcdCli       *clientv3.Client
+	backfillJobCh chan struct{}
 
 	*waitSchemaSyncedController
 	*schemaVersionManager
@@ -549,6 +550,7 @@ func newDDL(ctx context.Context, options ...Option) *ddl {
 		schemaVersionManager:       newSchemaVersionManager(),
 		waitSchemaSyncedController: newWaitSchemaSyncedController(),
 		runningJobIDs:              make([]string, 0, jobRecordCapacity),
+		backfillJobCh:              make(chan struct{}, 100),
 	}
 	ddlCtx.reorgCtx.reorgCtxMap = make(map[int64]*reorgCtx)
 	ddlCtx.jobCtx.jobCtxMap = make(map[int64]*JobContext)
@@ -621,6 +623,7 @@ func (d *ddl) prepareWorkers4ConcurrencyDDL() {
 		}
 	})
 	d.wg.Run(d.startDispatchLoop)
+	d.wg.Run(d.startBackfillLoop)
 }
 
 func (d *ddl) prepareWorkers4legacyDDL() {
