@@ -25,6 +25,8 @@ const (
 	ReorgTable = "tidb_ddl_reorg"
 	// HistoryTable stores the history DDL jobs.
 	HistoryTable = "tidb_ddl_history"
+	// BackfillJobTable stores the information of backfill jobs.
+	BackfillJobTable = `tidb_ddl_backfill_job`
 
 	// JobTableID is the table ID of `tidb_ddl_job`.
 	JobTableID = meta.MaxInt48 - 1
@@ -32,6 +34,8 @@ const (
 	ReorgTableID = meta.MaxInt48 - 2
 	// HistoryTableID is the table ID of `tidb_ddl_history`.
 	HistoryTableID = meta.MaxInt48 - 3
+	// BackfillJobTableID is the table ID of `tidb_ddl_backfill_job`.
+	BackfillJobTableID = meta.MaxInt48 - 4
 
 	// JobTableSQL is the CREATE TABLE SQL of `tidb_ddl_job`.
 	JobTableSQL = "create table " + JobTable + "(job_id bigint not null, reorg int, schema_ids text(65535), table_ids text(65535), job_meta longblob, type int, processing int, primary key(job_id))"
@@ -39,4 +43,6 @@ const (
 	ReorgTableSQL = "create table " + ReorgTable + "(job_id bigint not null, ele_id bigint, ele_type blob, start_key blob, end_key blob, physical_id bigint, reorg_meta longblob, unique key(job_id, ele_id, ele_type(20)))"
 	// HistoryTableSQL is the CREATE TABLE SQL of `tidb_ddl_history`.
 	HistoryTableSQL = "create table " + HistoryTable + "(job_id bigint not null, job_meta longblob, db_name char(64), table_name char(64), schema_ids text(65535), table_ids text(65535), create_time datetime, primary key(job_id))"
+	// BackfillJobTableSQL is the CREATE TABLE SQL of `tidb_ddl_backfill_job`
+	BackfillJobTableSQL = "create table " + BackfillJobTable + "(backfill_job_id bigint not null, job_id bigint not null, type int not null, curr_key blob, start_key blob, end_key blob, endInclude bool, exec_id blob, exec_lease time, backfill_job_state int, row_count bigint, err_msg blob, primary key(job_id, backfill_job_id))"
 )

@@ -570,6 +570,38 @@ func setSessCtxLocation(sctx sessionctx.Context, info *reorgInfo) error {
 	return nil
 }
 
+const (
+	addBackfillJobSQL = "insert into mysql.tidb_ddl_backfill_job(job_id, backfill_job_id, type, curr_key, start_key, end_key, endInclude, backfill_job_state) values"
+)
+
+func (w *worker) addBackfillJobToTable(t table.PhysicalTable, bfWorkerType backfillWorkerType, reorgInfo *reorgInfo) error {
+	startKey, endKey := reorgInfo.StartKey, reorgInfo.EndKey
+
+	kvRanges, err := splitTableRanges(t, reorgInfo.d.store, startKey, endKey)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	ctx := kv.WithInternalSourceType(context.Background(), kv.InternalTxnDDL)
+
+	var sql bytes.Buffer
+	for i, kvRange := range kvRanges {
+		endInclude := false
+		if i == len(kvRanges)-1 {
+			endInclude = true
+		}
+		sql.WriteString(fmt.Sprintf("%s (%d, %d, %d, %s, %s, %s, %t, %d)",
+			addBackfillJobSQL, reorgInfo.Job.ID, i, bfWorkerType, strconv.Quote(kvRange.StartKey.String()),
+			strconv.Quote(kvRange.StartKey.String()), strconv.Quote(kvRange.EndKey.String()), endInclude, model.JobStateQueueing))
+		_, err = w.sess.execute(ctx, sql.String(), "insert_backfill_job")
+		if err != nil {
+			return err
+		}
+		sql.Reset()
+	}
+	return nil
+}
+
 // writePhysicalTableRecord handles the "add index" or "modify/change column" reorganization state for a non-partitioned table or a partition.
 // For a partitioned table, it should be handled partition by partition.
 //

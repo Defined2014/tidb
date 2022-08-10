@@ -2619,10 +2619,11 @@ var (
 		{ddl.JobTableSQL, ddl.JobTableID},
 		{ddl.ReorgTableSQL, ddl.ReorgTableID},
 		{ddl.HistoryTableSQL, ddl.HistoryTableID},
+		{ddl.BackfillJobTableSQL, ddl.BackfillJobTableID},
 	}
 )
 
-// InitDDLJobTables is to create tidb_ddl_job, tidb_ddl_reorg and tidb_ddl_history.
+// InitDDLJobTables is to create tidb_ddl_job, tidb_ddl_reorg, tidb_ddl_history and tidb_ddl_backfill_job.
 func InitDDLJobTables(store kv.Storage) error {
 	return kv.RunInNewTxn(kv.WithInternalSourceType(context.Background(), kv.InternalTxnDDL), store, true, func(ctx context.Context, txn kv.Transaction) error {
 		t := meta.NewMeta(txn)
