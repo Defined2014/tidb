@@ -590,6 +590,7 @@ func (m *Meta) CheckDDLTableExists() (bool, error) {
 	return len(v) != 0, nil
 }
 
+// SetFlashbackClusterJobID set flashback cluster jobID
 func (m *Meta) SetFlashbackClusterJobID(jobID int64) error {
 	return errors.Trace(m.txn.Set(mInFlashbackCluster, m.jobIDKey(jobID)))
 }

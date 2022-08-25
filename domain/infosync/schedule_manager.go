@@ -26,6 +26,7 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
+// ScheduleManager manages schedule configs
 type ScheduleManager interface {
 	GetPDScheduleConfig(ctx context.Context) (map[string]interface{}, error)
 	SetPDScheduleConfig(ctx context.Context, config map[string]interface{}) error
@@ -36,6 +37,7 @@ type PDScheduleManager struct {
 	etcdCli *clientv3.Client
 }
 
+// GetPDScheduleConfig get schedule config from pd
 func (sm *PDScheduleManager) GetPDScheduleConfig(ctx context.Context) (map[string]interface{}, error) {
 	ret, err := doRequest(ctx, "GetPDSchedule", sm.etcdCli.Endpoints(), path.Join(pdapi.Config, "schedule"), "GET", nil)
 	if err != nil {
@@ -50,13 +52,14 @@ func (sm *PDScheduleManager) GetPDScheduleConfig(ctx context.Context) (map[strin
 	return schedule, nil
 }
 
+// SetPDScheduleConfig set schedule config to pd
 func (sm *PDScheduleManager) SetPDScheduleConfig(ctx context.Context, config map[string]interface{}) error {
-	configJson, err := json.Marshal(config)
+	configJSON, err := json.Marshal(config)
 	if err != nil {
 		return err
 	}
 
-	_, err = doRequest(ctx, "SetPDSchedule", sm.etcdCli.Endpoints(), path.Join(pdapi.Config, "schedule"), "POST", bytes.NewReader(configJson))
+	_, err = doRequest(ctx, "SetPDSchedule", sm.etcdCli.Endpoints(), path.Join(pdapi.Config, "schedule"), "POST", bytes.NewReader(configJSON))
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -69,6 +72,7 @@ type mockScheduleManager struct {
 	schedules map[string]interface{}
 }
 
+// GetPDScheduleConfig get schedule config from schedules map
 func (mm *mockScheduleManager) GetPDScheduleConfig(ctx context.Context) (map[string]interface{}, error) {
 	mm.Lock()
 	defer mm.Unlock()
@@ -76,6 +80,7 @@ func (mm *mockScheduleManager) GetPDScheduleConfig(ctx context.Context) (map[str
 	return mm.schedules, nil
 }
 
+// SetPDScheduleConfig set schedule config to schedules map
 func (mm *mockScheduleManager) SetPDScheduleConfig(ctx context.Context, config map[string]interface{}) error {
 	mm.Lock()
 	defer mm.Unlock()

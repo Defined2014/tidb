@@ -1177,6 +1177,7 @@ func DeleteInternalSession(se interface{}) {
 	sm.DeleteInternalSession(se)
 }
 
+// GetPDScheduleConfig gets the schedule information from pd
 func GetPDScheduleConfig(ctx context.Context) (map[string]interface{}, error) {
 	is, err := getGlobalInfoSyncer()
 	if err != nil {
@@ -1185,6 +1186,7 @@ func GetPDScheduleConfig(ctx context.Context) (map[string]interface{}, error) {
 	return is.scheduleManager.GetPDScheduleConfig(ctx)
 }
 
+// SetPDScheduleConfig sets the schedule information for pd
 func SetPDScheduleConfig(ctx context.Context, config map[string]interface{}) error {
 	is, err := getGlobalInfoSyncer()
 	if err != nil {
