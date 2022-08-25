@@ -541,6 +541,8 @@ func (w *worker) finishDDLJob(t *meta.Meta, job *model.Job) (err error) {
 	switch job.Type {
 	case model.ActionRecoverTable:
 		err = finishRecoverTable(w, job)
+	case model.ActionFlashbackCluster:
+		err = finishFlashbackCluster(w, job)
 	case model.ActionCreateTables:
 		if job.IsCancelled() {
 			// it may be too large that it can not be added to the history queue, too
@@ -1094,6 +1096,17 @@ func (w *worker) runDDLJob(d *ddlCtx, t *meta.Meta, job *model.Job) (ver int64, 
 	if job.Type != model.ActionMultiSchemaChange {
 		logutil.Logger(w.logCtx).Info("[ddl] run DDL job", zap.String("job", job.String()))
 	}
+
+	flashbackJobID, err := t.GetFlashbackClusterJobID()
+	if err != nil {
+		job.State = model.JobStateCancelled
+		return ver, err
+	}
+	if flashbackJobID != 0 && flashbackJobID != job.ID {
+		job.State = model.JobStateCancelled
+		return ver, errors.Errorf("Can't do ddl job, cluster is flashing back now")
+	}
+
 	timeStart := time.Now()
 	if job.RealStartTS == 0 {
 		job.RealStartTS = t.StartTS

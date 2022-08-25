@@ -918,6 +918,20 @@ func setDDLJobQuery(ctx sessionctx.Context, job *model.Job) {
 // - context.Cancel: job has been sent to worker, but not found in history DDL job before cancel
 // - other: found in history DDL job and return that job error
 func (d *ddl) DoDDLJob(ctx sessionctx.Context, job *model.Job) error {
+	err := kv.RunInNewTxn(d.ctx, d.store, true, func(ctx context.Context, txn kv.Transaction) error {
+		flashbackJobID, err := meta.NewMeta(txn).GetFlashbackClusterJobID()
+		if err != nil {
+			return err
+		}
+		if flashbackJobID != 0 && flashbackJobID != job.ID {
+			return errors.Errorf("Can't do ddl job, cluster is flashing back now")
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
 	if mci := ctx.GetSessionVars().StmtCtx.MultiSchemaInfo; mci != nil {
 		// In multiple schema change, we don't run the job.
 		// Instead, we merge all the jobs into one pending job.
@@ -942,7 +956,7 @@ func (d *ddl) DoDDLJob(ctx sessionctx.Context, job *model.Job) error {
 	})
 
 	// worker should restart to continue handling tasks in limitJobCh, and send back through task.err
-	err := <-task.err
+	err = <-task.err
 	if err != nil {
 		// The transaction of enqueuing job is failed.
 		return errors.Trace(err)
