@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/meta"
 	"github.com/pingcap/tidb/parser/model"
+	"github.com/pingcap/tidb/tablecodec"
 	"github.com/pingcap/tidb/util/gcutil"
 )
 
@@ -117,7 +118,8 @@ func checkFlashbackCluster(w *worker, d *ddlCtx, t *meta.Meta, job *model.Job, f
 
 func (w *worker) onFlashbackCluster(d *ddlCtx, t *meta.Meta, job *model.Job) (ver int64, err error) {
 	var flashbackTS uint64
-	if err := job.DecodeArgs(&flashbackTS); err != nil {
+	var minTableID int64
+	if err := job.DecodeArgs(&flashbackTS, &minTableID); err != nil {
 		job.State = model.JobStateCancelled
 		return ver, errors.Trace(err)
 	}
@@ -132,14 +134,25 @@ func (w *worker) onFlashbackCluster(d *ddlCtx, t *meta.Meta, job *model.Job) (ve
 		return ver, errors.Trace(err)
 	}
 
+	if flashbackJobID == 0 {
+		startKey := tablecodec.EncodeTablePrefix(minTableID)
+		endKey := tablecodec.EncodeTablePrefix(meta.MaxGlobalID)
+
+		kvRanges, err := splitKeyRanges(d.store, startKey, endKey)
+		if err != nil {
+			job.State = model.JobStateCancelled
+			return ver, errors.Trace(err)
+		}
+	}
+
 	job.State = model.JobStateDone
 	return ver, errors.Trace(err)
 }
 
 func finishFlashbackCluster(w *worker, job *model.Job) error {
-	var flashbackTS uint64
+	var flashbackTS, maxTableID uint64
 	var pdScheduleValue map[string]interface{}
-	if err := job.DecodeArgs(&flashbackTS, &pdScheduleValue); err != nil {
+	if err := job.DecodeArgs(&flashbackTS, &maxTableID, &pdScheduleValue); err != nil {
 		return errors.Trace(err)
 	}
 

@@ -336,14 +336,9 @@ func (w *backfillWorker) run(d *ddlCtx, bf backfiller, job *model.Job) {
 	logutil.BgLogger().Info("[ddl] backfill worker exit", zap.Int("workerID", w.id))
 }
 
-// splitTableRanges uses PD region's key ranges to split the backfilling table key range space,
+// splitKeyRanges uses PD region's key ranges to split the backfilling table key range space,
 // to speed up backfilling data in table with disperse handle.
-// The `t` should be a non-partitioned table or a partition.
-func splitTableRanges(t table.PhysicalTable, store kv.Storage, startKey, endKey kv.Key) ([]kv.KeyRange, error) {
-	logutil.BgLogger().Info("[ddl] split table range from PD",
-		zap.Int64("physicalTableID", t.GetPhysicalID()),
-		zap.String("startHandle", tryDecodeToHandleString(startKey)),
-		zap.String("endHandle", tryDecodeToHandleString(endKey)))
+func splitKeyRanges(store kv.Storage, startKey, endKey kv.Key) ([]kv.KeyRange, error) {
 	kvRange := kv.KeyRange{StartKey: startKey, EndKey: endKey}
 	s, ok := store.(tikv.Storage)
 	if !ok {
@@ -619,7 +614,11 @@ func (w *worker) writePhysicalTableRecord(t table.PhysicalTable, bfWorkerType ba
 	jc := w.jobContext(job)
 
 	for {
-		kvRanges, err := splitTableRanges(t, reorgInfo.d.store, startKey, endKey)
+		logutil.BgLogger().Info("[ddl] split table range from PD",
+			zap.Int64("physicalTableID", t.GetPhysicalID()),
+			zap.String("startHandle", tryDecodeToHandleString(startKey)),
+			zap.String("endHandle", tryDecodeToHandleString(endKey)))
+		kvRanges, err := splitKeyRanges(reorgInfo.d.store, startKey, endKey)
 		if err != nil {
 			return errors.Trace(err)
 		}

@@ -37,6 +37,7 @@ import (
 	"github.com/pingcap/tidb/expression"
 	"github.com/pingcap/tidb/infoschema"
 	"github.com/pingcap/tidb/kv"
+	"github.com/pingcap/tidb/meta"
 	"github.com/pingcap/tidb/meta/autoid"
 	"github.com/pingcap/tidb/parser/ast"
 	"github.com/pingcap/tidb/parser/charset"
@@ -2594,12 +2595,26 @@ func (d *ddl) preSplitAndScatter(ctx sessionctx.Context, tbInfo *model.TableInfo
 }
 
 func (d *ddl) FlashbackCluster(ctx sessionctx.Context, flashbackTS uint64) error {
+	sctx, err := d.sessPool.get()
+	if err != nil {
+		return errors.Trace(err)
+	}
+	rows, err := newSession(sctx).execute(context.Background(),
+		fmt.Sprintf("select max(TIDB_TABLE_ID) from information_schema.tables where TIDB_TABLE_ID<%d and TABLE_SCHEMA == 'mysql'", meta.MaxGlobalID),
+		"get_max_table_id")
+	if err != nil {
+		return errors.Trace(err)
+	}
+	if len(rows) == 0 {
+		return errors.Errorf("Get maxTableID failed, please retry later or contact with PingCAP")
+	}
+	minTableId := rows[0].GetInt64(0) + 1
 	job := &model.Job{
 		Type:       model.ActionFlashbackCluster,
 		BinlogInfo: &model.HistoryInfo{},
-		Args:       []interface{}{flashbackTS, map[string]interface{}{}},
+		Args:       []interface{}{flashbackTS, minTableId, map[string]interface{}{}},
 	}
-	err := d.DoDDLJob(ctx, job)
+	err = d.DoDDLJob(ctx, job)
 	err = d.callHookOnChanged(job, err)
 	return errors.Trace(err)
 }
