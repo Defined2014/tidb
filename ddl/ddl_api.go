@@ -66,7 +66,6 @@ import (
 	"github.com/pingcap/tidb/util/set"
 	"github.com/pingcap/tidb/util/sqlexec"
 	"github.com/pingcap/tidb/util/stringutil"
-	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
 
@@ -2707,8 +2706,40 @@ func (d *ddl) preSplitAndScatter(ctx sessionctx.Context, tbInfo *model.TableInfo
 	}
 }
 
+func (d *ddl) FlashbackTablesToTimestamp(ctx sessionctx.Context, s *ast.FlashBackToTimestampStmt, flashbackTS uint64) error {
+	is := d.GetInfoSchemaWithInterceptor(ctx)
+	idents := make([]ast.Ident, 0, len(s.Tables))
+	for _, t := range s.Tables {
+		ident := ast.Ident{Schema: t.Schema, Name: t.Name}
+		idents = append(idents, ident)
+
+		tblInfo, err := is.TableByName(t.Schema, t.Name)
+		if err != nil {
+			return err
+		}
+
+		if tblInfo.Meta().TempTableType != model.TempTableNone {
+			return errors.Trace(dbterror.ErrOptOnTemporaryTable.GenWithStackByArgs("Flashback Tables To Timestamp"))
+		}
+	}
+
+	job := &model.Job{
+		Type:       model.ActionFlashbackTablesToTimestamp,
+		BinlogInfo: &model.HistoryInfo{},
+		Args: []interface{}{
+			flashbackTS,
+			map[string]interface{}{},
+			true, /* tidb_gc_enable */
+			0,    /* totalRegions */
+			0     /* newCommitTS */},
+		CtxVars: []interface{}{idents},
+	}
+	err := d.DoDDLJob(ctx, job)
+	err = d.callHookOnChanged(job, err)
+	return errors.Trace(err)
+}
+
 func (d *ddl) FlashbackCluster(ctx sessionctx.Context, flashbackTS uint64) error {
-	logutil.BgLogger().Info("[ddl] get flashback cluster job", zap.String("flashbackTS", oracle.GetTimeFromTS(flashbackTS).String()))
 	job := &model.Job{
 		Type:       model.ActionFlashbackCluster,
 		BinlogInfo: &model.HistoryInfo{},
@@ -2720,7 +2751,7 @@ func (d *ddl) FlashbackCluster(ctx sessionctx.Context, flashbackTS uint64) error
 			variable.On,  /* tidb_enable_auto_analyze */
 			variable.Off, /* tidb_super_read_only */
 			0,            /* totalRegions */
-			0 /* newCommitTS */},
+			0             /* newCommitTS */},
 	}
 	err := d.DoDDLJob(ctx, job)
 	err = d.callHookOnChanged(job, err)

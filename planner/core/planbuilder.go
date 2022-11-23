@@ -4584,8 +4584,37 @@ func (b *PlanBuilder) buildDDL(ctx context.Context, node ast.DDLNode) (Plan, err
 		// Recover table command can only be executed by administrator.
 		b.visitInfo = appendVisitInfo(b.visitInfo, mysql.SuperPriv, "", "", "", nil)
 	case *ast.FlashBackToTimestampStmt:
-		// Flashback cluster can only be executed by user with `super` privilege.
-		b.visitInfo = appendVisitInfo(b.visitInfo, mysql.SuperPriv, "", "", "", nil)
+		user := b.ctx.GetSessionVars().User
+		if v.Tables != nil {
+			for _, table := range v.Tables {
+				var selectAuthErr, dropAuthErr, insertAuthErr, updateAuthErr error
+				if user != nil {
+					selectAuthErr = ErrTableaccessDenied.FastGenByArgs("SELECT", user.AuthUsername, user.AuthHostname, table.Name.L)
+					dropAuthErr = ErrTableaccessDenied.FastGenByArgs("DROP", user.AuthUsername, user.AuthHostname, table.Name.L)
+					insertAuthErr = ErrTableaccessDenied.FastGenByArgs("INSERT", user.AuthUsername, user.AuthHostname, table.Name.L)
+					updateAuthErr = ErrTableaccessDenied.FastGenByArgs("UPDATE", user.AuthUsername, user.AuthHostname, table.Name.L)
+				}
+				b.visitInfo = appendVisitInfo(b.visitInfo, mysql.SelectPriv, table.DBInfo.Name.L, table.Name.L, "", selectAuthErr)
+				b.visitInfo = appendVisitInfo(b.visitInfo, mysql.DropPriv, table.DBInfo.Name.L, table.Name.L, "", dropAuthErr)
+				b.visitInfo = appendVisitInfo(b.visitInfo, mysql.InsertPriv, table.DBInfo.Name.L, table.Name.L, "", insertAuthErr)
+				b.visitInfo = appendVisitInfo(b.visitInfo, mysql.UpdatePriv, table.DBInfo.Name.L, table.Name.L, "", updateAuthErr)
+			}
+		} else if v.DBName.O != "" {
+			var selectAuthErr, dropAuthErr, insertAuthErr, updateAuthErr error
+			if user != nil {
+				selectAuthErr = ErrDBaccessDenied.FastGenByArgs("SELECT", user.AuthUsername, user.AuthHostname, v.DBName.L)
+				dropAuthErr = ErrDBaccessDenied.FastGenByArgs("DROP", user.AuthUsername, user.AuthHostname, v.DBName.L)
+				insertAuthErr = ErrDBaccessDenied.FastGenByArgs("INSERT", user.AuthUsername, user.AuthHostname, v.DBName.L)
+				updateAuthErr = ErrDBaccessDenied.FastGenByArgs("UPDATE", user.AuthUsername, user.AuthHostname, v.DBName.L)
+			}
+			b.visitInfo = appendVisitInfo(b.visitInfo, mysql.SelectPriv, v.DBName.L, "", "", selectAuthErr)
+			b.visitInfo = appendVisitInfo(b.visitInfo, mysql.DropPriv, v.DBName.L, "", "", dropAuthErr)
+			b.visitInfo = appendVisitInfo(b.visitInfo, mysql.InsertPriv, v.DBName.L, "", "", insertAuthErr)
+			b.visitInfo = appendVisitInfo(b.visitInfo, mysql.UpdatePriv, v.DBName.L, "", "", updateAuthErr)
+		} else {
+			// Flashback cluster can only be executed by user with `super` privilege.
+			b.visitInfo = appendVisitInfo(b.visitInfo, mysql.SuperPriv, "", "", "", nil)
+		}
 	case *ast.LockTablesStmt:
 		user := b.ctx.GetSessionVars().User
 		for _, lock := range v.TableLocks {

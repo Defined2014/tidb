@@ -189,6 +189,7 @@ type DDL interface {
 	DropPlacementPolicy(ctx sessionctx.Context, stmt *ast.DropPlacementPolicyStmt) error
 	AlterPlacementPolicy(ctx sessionctx.Context, stmt *ast.AlterPlacementPolicyStmt) error
 	FlashbackCluster(ctx sessionctx.Context, flashbackTS uint64) error
+	FlashbackTablesToTimestamp(ctx sessionctx.Context, stmt *ast.FlashBackToTimestampStmt, flashbackTS uint64) error
 
 	// CreateSchemaWithInfo creates a database (schema) given its database info.
 	//

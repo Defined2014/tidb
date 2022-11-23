@@ -173,13 +173,7 @@ func (e *DDLExec) Next(ctx context.Context, req *chunk.Chunk) (err error) {
 	case *ast.FlashBackTableStmt:
 		err = e.executeFlashbackTable(x)
 	case *ast.FlashBackToTimestampStmt:
-		if len(x.Tables) != 0 {
-			err = dbterror.ErrGeneralUnsupportedDDL.GenWithStack("Unsupported FLASHBACK table TO TIMESTAMP")
-		} else if x.DBName.O != "" {
-			err = dbterror.ErrGeneralUnsupportedDDL.GenWithStack("Unsupported FLASHBACK database TO TIMESTAMP")
-		} else {
-			err = e.executeFlashBackCluster(x)
-		}
+		err = e.executeFlashBackToTimestamp(x)
 	case *ast.RenameTableStmt:
 		err = e.executeRenameTable(x)
 	case *ast.TruncateTableStmt:
@@ -530,13 +524,20 @@ func (e *DDLExec) getRecoverTableByTableName(tableName *ast.TableName) (*model.J
 	return jobInfo, tableInfo, nil
 }
 
-func (e *DDLExec) executeFlashBackCluster(s *ast.FlashBackToTimestampStmt) error {
+func (e *DDLExec) executeFlashBackToTimestamp(s *ast.FlashBackToTimestampStmt) error {
 	flashbackTS, err := staleread.CalculateAsOfTsExpr(e.ctx, s.FlashbackTS)
 	if err != nil {
 		return err
 	}
 
-	return domain.GetDomain(e.ctx).DDL().FlashbackCluster(e.ctx, flashbackTS)
+	if len(s.Tables) != 0 {
+		err = domain.GetDomain(e.ctx).DDL().FlashbackTablesToTimestamp(e.ctx, s, flashbackTS)
+	} else if s.DBName.O != "" {
+		err = dbterror.ErrGeneralUnsupportedDDL.GenWithStack("Unsupported FLASHBACK database TO TIMESTAMP")
+	} else {
+		err = domain.GetDomain(e.ctx).DDL().FlashbackCluster(e.ctx, flashbackTS)
+	}
+	return err
 }
 
 func (e *DDLExec) executeFlashbackTable(s *ast.FlashBackTableStmt) error {

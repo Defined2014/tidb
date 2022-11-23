@@ -323,6 +323,11 @@ func (d SchemaTracker) RecoverTable(ctx sessionctx.Context, recoverInfo *ddl.Rec
 	return nil
 }
 
+// FlashbackTablesToTimestamp implements the DDL interface, which is no-op in DM's case.
+func (d SchemaTracker) FlashbackTablesToTimestamp(ctx sessionctx.Context, s *ast.FlashBackToTimestampStmt, flashbackTS uint64) (err error) {
+	return nil
+}
+
 // FlashbackCluster implements the DDL interface, which is no-op in DM's case.
 func (d SchemaTracker) FlashbackCluster(ctx sessionctx.Context, flashbackTS uint64) (err error) {
 	return nil

@@ -99,6 +99,7 @@ const (
 	ActionFlashbackCluster              ActionType = 62
 	ActionRecoverSchema                 ActionType = 63
 	ActionReorganizePartition           ActionType = 64
+	ActionFlashbackTablesToTimestamp    ActionType = 65
 )
 
 var actionMap = map[ActionType]string{

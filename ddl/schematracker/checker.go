@@ -274,6 +274,12 @@ func (d Checker) RecoverTable(ctx sessionctx.Context, recoverInfo *ddl.RecoverIn
 	panic("implement me")
 }
 
+// FlashbackTablesToTimestamp implements the DDL interface.
+func (d Checker) FlashbackTablesToTimestamp(ctx sessionctx.Context, s *ast.FlashBackToTimestampStmt, flashbackTS uint64) (err error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 // FlashbackCluster implements the DDL interface.
 func (d Checker) FlashbackCluster(ctx sessionctx.Context, flashbackTS uint64) (err error) {
 	//TODO implement me
