@@ -34,7 +34,7 @@ import (
 )
 
 // WithTiKV flag is only used for debugging locally with real tikv cluster.
-var WithTiKV = flag.String("with-tikv", "", "address of tikv cluster, if set, running test with real tikv cluster")
+var WithTiKV = flag.String("with-tikv", "127.0.0.1:2379", "address of tikv cluster, if set, running test with real tikv cluster")
 
 // CreateMockStore return a new mock kv.Storage.
 func CreateMockStore(t testing.TB, opts ...mockstore.MockTiKVStoreOption) kv.Storage {

@@ -1170,6 +1170,14 @@ func (p *PhysicalTopN) pushPartialTopNDownToCop(copTsk *copTask) (task, bool) {
 			}
 			if plan, ok := finalScan.(*PhysicalIndexScan); ok {
 				plan.ByItems = p.ByItems
+				if tblInfo.GetPartitionInfo() != nil {
+					plan.Columns = append(plan.Columns, model.NewExtraPhysTblIDColInfo())
+					plan.schema.Append(&expression.Column{
+						RetType:  types.NewFieldType(mysql.TypeLonglong),
+						UniqueID: p.ctx.GetSessionVars().AllocPlanColumnID(),
+						ID:       model.ExtraPhysTblID,
+					})
+				}
 			}
 			partialScans = append(partialScans, finalScan)
 		}
@@ -1244,6 +1252,7 @@ func (p *PhysicalTopN) pushPartialTopNDownToCop(copTsk *copTask) (task, bool) {
 				}
 				indexMerge.ByItems = p.ByItems
 				indexMerge.KeepOrder = true
+
 				return rootTask, true
 			}
 		} else {
@@ -1291,6 +1300,13 @@ func (p *PhysicalTopN) pushPartialTopNDownToCop(copTsk *copTask) (task, bool) {
 					ts.schema.Append(extraCol)
 					ts.HandleIdx = []int{len(ts.Columns) - 1}
 				}
+				is := idxLookup.IndexPlans[0].(*PhysicalIndexScan)
+				is.Columns = append(is.Columns, model.NewExtraPhysTblIDColInfo())
+				is.schema.Append(&expression.Column{
+					RetType:  types.NewFieldType(mysql.TypeLonglong),
+					UniqueID: p.ctx.GetSessionVars().AllocPlanColumnID(),
+					ID:       model.ExtraPhysTblID,
+				})
 				return rootTask, true
 			}
 			rootLimit := PhysicalLimit{

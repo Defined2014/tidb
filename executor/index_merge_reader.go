@@ -385,8 +385,7 @@ func (e *IndexMergeReaderExecutor) startPartialIndexWorker(ctx context.Context, 
 					SetClosestReplicaReadAdjuster(newClosestReadAdjuster(e.ctx, &builder.Request, e.partialNetDataSizes[workID])).
 					SetConnID(e.ctx.GetSessionVars().ConnectionID)
 
-				tps := worker.getRetTpsForIndexScan(e.handleCols, false)
-				pids := make([]int64, 0, len(keyRanges))
+				tps := worker.getRetTpsForIndexScan(e.handleCols)
 				results := make([]distsql.SelectResult, 0, len(keyRanges))
 				defer func() {
 					// To make sure SelectResult.Close() is called even got panic in fetchHandles().
@@ -396,7 +395,7 @@ func (e *IndexMergeReaderExecutor) startPartialIndexWorker(ctx context.Context, 
 						}
 					}
 				}()
-				for parTblIdx, keyRange := range keyRanges {
+				for _, keyRange := range keyRanges {
 					// check if this executor is closed
 					select {
 					case <-ctx.Done():
@@ -423,14 +422,11 @@ func (e *IndexMergeReaderExecutor) startPartialIndexWorker(ctx context.Context, 
 					}
 					results = append(results, result)
 					failpoint.Inject("testIndexMergePartialIndexWorkerCoprLeak", nil)
-					if e.partitionTableMode {
-						pids = append(pids, e.prunedPartitions[parTblIdx].GetPhysicalID())
-					}
 				}
 				worker.batchSize = mathutil.Min(e.maxChunkSize, worker.maxBatchSize)
 				if len(results) > 1 && len(e.byItems) != 0 {
 					// e.Schema() not the output schema for partialIndexReader, and we put byItems related column at first in `buildIndexReq`, so use nil here.
-					ssr := distsql.NewSortedSelectResults(results, pids, nil, e.byItems, e.memTracker)
+					ssr := distsql.NewSortedSelectResults(results, nil, e.byItems, e.memTracker)
 					results = []distsql.SelectResult{ssr}
 				}
 				ctx1, cancel := context.WithCancel(ctx)
@@ -1458,7 +1454,7 @@ func (w *partialIndexWorker) fetchHandles(
 	finished <-chan struct{},
 	handleCols plannercore.HandleCols,
 	partialPlanIndex int) (count int64, err error) {
-	tps := w.getRetTpsForIndexScan(handleCols, w.hasExtralPidCol())
+	tps := w.getRetTpsForIndexScan(handleCols)
 	chk := chunk.NewChunkWithCapacity(tps, w.maxChunkSize)
 	for i := 0; i < len(results); {
 		start := time.Now()
@@ -1489,7 +1485,7 @@ func (w *partialIndexWorker) fetchHandles(
 	return count, nil
 }
 
-func (w *partialIndexWorker) getRetTpsForIndexScan(handleCols plannercore.HandleCols, hasExtralPids bool) []*types.FieldType {
+func (w *partialIndexWorker) getRetTpsForIndexScan(handleCols plannercore.HandleCols) []*types.FieldType {
 	var tps []*types.FieldType
 	if len(w.byItems) != 0 {
 		for _, item := range w.byItems {
@@ -1497,7 +1493,7 @@ func (w *partialIndexWorker) getRetTpsForIndexScan(handleCols plannercore.Handle
 		}
 	}
 	tps = append(tps, handleCols.GetFieldsTypes()...)
-	if hasExtralPids {
+	if w.hasExtralPidCol() {
 		tps = append(tps, types.NewFieldType(mysql.TypeLonglong))
 	}
 	return tps
@@ -1542,7 +1538,7 @@ func (w *partialIndexWorker) extractTaskHandles(ctx context.Context, chk *chunk.
 		// used for limit embedded.
 		if len(w.byItems) != 0 {
 			if retChk == nil {
-				retChk = chunk.NewChunkWithCapacity(w.getRetTpsForIndexScan(handleCols, w.hasExtralPidCol()), w.batchSize)
+				retChk = chunk.NewChunkWithCapacity(w.getRetTpsForIndexScan(handleCols), w.batchSize)
 			}
 			retChk.Append(chk, 0, chk.NumRows())
 		}
