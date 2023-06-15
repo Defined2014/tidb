@@ -19,6 +19,9 @@ package testkit
 import (
 	"context"
 	"fmt"
+	"os"
+	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -52,11 +55,59 @@ type TestKit struct {
 	store   kv.Storage
 	session session.Session
 	alloc   chunk.Allocator
+	file    *os.File
+}
+
+func getTestCaseInfo() (string, string) {
+	pattern := `\.(Test\S+?)\(`
+
+	re := regexp.MustCompile(pattern)
+
+	stackSlice := make([]byte, 5120)
+	l := runtime.Stack(stackSlice, false)
+	s := string(stackSlice[0:l])
+	stacks := strings.Split(s, "\n")
+	for i, stack := range stacks {
+		match := re.FindStringSubmatch(stack)
+		if len(match) > 1 {
+			caseName := match[1]
+			fmt.Println("Found match:", caseName)
+			path := strings.TrimSpace(strings.Split(stacks[i+1], "_test.go")[0])
+			path = path + ".test"
+			fmt.Println("File path:", path)
+			return caseName, path
+		}
+	}
+	panic("Should not happen")
+}
+
+func writeComment(file *os.File, comment string) {
+	_, err := file.WriteString("# " + comment + "\n")
+	if err != nil {
+		panic(err.Error())
+	}
+}
+
+func writeStatement(file *os.File, statement string) {
+	if statement == "seLEct 3" || statement == "use test" {
+		return
+	}
+	_, err := file.WriteString(strings.TrimRight(statement, ";") + ";\n")
+	if err != nil {
+		panic(err)
+	}
+}
+
+func stackExample() {
+	// stackSlice := make([]byte, 5120)
+	// s := runtime.Stack(stackSlice, false)
+	// fmt.Printf("\n%s", stackSlice[0:s])
 }
 
 // NewTestKit returns a new *TestKit.
 func NewTestKit(t testing.TB, store kv.Storage) *TestKit {
 	require.True(t, intest.InTest, "you should add --tags=intest when to test, see https://pingcap.github.io/tidb-dev-guide/get-started/setup-an-ide.html for help")
+
 	testenv.SetGOMAXPROCSForTest()
 	tk := &TestKit{
 		require: require.New(t),
@@ -65,6 +116,23 @@ func NewTestKit(t testing.TB, store kv.Storage) *TestKit {
 		store:   store,
 		alloc:   chunk.NewAllocator(),
 	}
+	caseName, filepath := getTestCaseInfo()
+	var err error
+	fmt.Println("XXXXXXX file open:", filepath)
+	fmt.Println("######### STACK ################")
+	stackExample()
+	fmt.Println("\n\n######### CALLER ################")
+	tk.file, err = os.OpenFile(filepath, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
+	if err != nil {
+		panic(err)
+	}
+	writeComment(tk.file, caseName)
+	tk.t.Cleanup(func() {
+		tk.file.WriteString("\n")
+		fmt.Println("XXXXXXX file closed:", filepath)
+		tk.file.Close()
+	})
+
 	tk.RefreshSession()
 
 	dom, _ := session.GetDomain(store)
@@ -87,7 +155,7 @@ func NewTestKit(t testing.TB, store kv.Storage) *TestKit {
 
 // NewTestKitWithSession returns a new *TestKit.
 func NewTestKitWithSession(t testing.TB, store kv.Storage, se session.Session) *TestKit {
-	return &TestKit{
+	tk := &TestKit{
 		require: require.New(t),
 		assert:  assert.New(t),
 		t:       t,
@@ -95,13 +163,27 @@ func NewTestKitWithSession(t testing.TB, store kv.Storage, se session.Session) *
 		session: se,
 		alloc:   chunk.NewAllocator(),
 	}
+	caseName, filepath := getTestCaseInfo()
+	var err error
+	fmt.Println("XXXXXXX file open:", filepath)
+	tk.file, err = os.OpenFile(filepath, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
+	if err != nil {
+		panic(err)
+	}
+	tk.t.Cleanup(func() {
+		fmt.Println("XXXXXXX file closed:", filepath)
+		tk.file.WriteString("\n")
+		tk.file.Close()
+	})
+	writeComment(tk.file, caseName)
+	return tk
 }
 
 // RefreshSession set a new session for the testkit
 func (tk *TestKit) RefreshSession() {
 	tk.session = newSession(tk.t, tk.store)
 	// enforce sysvar cache loading, ref loadCommonGlobalVariableIfNeeded
-	tk.MustExec("select 3")
+	tk.MustExec("seLEct 3")
 }
 
 // SetSession set the session of testkit
@@ -316,6 +398,7 @@ func (tk *TestKit) Exec(sql string, args ...interface{}) (sqlexec.RecordSet, err
 // ExecWithContext executes a sql statement using the prepared stmt API
 func (tk *TestKit) ExecWithContext(ctx context.Context, sql string, args ...interface{}) (rs sqlexec.RecordSet, err error) {
 	defer tk.Session().GetSessionVars().ClearAlloc(&tk.alloc, err != nil)
+	writeStatement(tk.file, sql)
 	if len(args) == 0 {
 		sc := tk.session.GetSessionVars().StmtCtx
 		prevWarns := sc.GetWarnings()
