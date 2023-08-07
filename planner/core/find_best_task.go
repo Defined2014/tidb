@@ -2545,11 +2545,22 @@ func (ds *DataSource) convertToBatchPointGet(prop *property.PhysicalProperty, ca
 		Columns:          ds.Columns,
 		PartitionExpr:    getPartitionExpr(ds.SCtx(), ds.TableInfo()),
 	}
+	pi := ds.tableInfo.GetPartitionInfo()
 	if ds.isPartition {
 		// static prune
 		batchPointGetPlan.PartTblID = make([]int64, 1)
 		batchPointGetPlan.PartTblID[0] = ds.physicalTableID
-	} else if ds.tableInfo.GetPartitionInfo() != nil {
+		if pi != nil {
+			batchPointGetPlan.PartitionInfos = make([]*model.PartitionDefinition, 1)
+			for _, df := range pi.Definitions {
+				if df.ID == ds.physicalTableID {
+					tmp := df.Clone()
+					batchPointGetPlan.PartitionInfos[0] = &tmp
+					break
+				}
+			}
+		}
+	} else if pi != nil {
 		// dynamic prune
 		idxs, err := PartitionPruning(ds.SCtx(), ds.table.GetPartitionedTable(), ds.allConds, ds.partitionNames, ds.TblCols, ds.names)
 		if err != nil || len(idxs) == 0 {
@@ -2557,10 +2568,20 @@ func (ds *DataSource) convertToBatchPointGet(prop *property.PhysicalProperty, ca
 		}
 		if idxs[0] != FullRange {
 			batchPointGetPlan.PartTblID = make([]int64, len(idxs))
+			batchPointGetPlan.PartitionInfos = make([]*model.PartitionDefinition, len(idxs))
 			for i, idx := range idxs {
-				batchPointGetPlan.PartTblID[i] = ds.tableInfo.GetPartitionInfo().Definitions[idx].ID
+				batchPointGetPlan.PartTblID[i] = pi.Definitions[idx].ID
 			}
 			slices.Sort(batchPointGetPlan.PartTblID)
+			for i, id := range batchPointGetPlan.PartTblID {
+				for _, df := range pi.Definitions {
+					if df.ID == id {
+						tmp := df.Clone()
+						batchPointGetPlan.PartitionInfos[i] = &tmp
+						break
+					}
+				}
+			}
 		}
 	}
 	if batchPointGetPlan.KeepOrder {
