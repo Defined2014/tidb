@@ -321,7 +321,9 @@ func (tk *TestKit) QueryToErr(sql string, args ...interface{}) error {
 	tk.require.NotNil(res, comment)
 	_, resErr := session.GetRows4Test(context.Background(), tk.session, res)
 	tk.require.NoError(res.Close())
-	tk.writeError(resErr)
+	if resErr != nil {
+		tk.writeError(resErr)
+	}
 	return resErr
 }
 
@@ -504,6 +506,9 @@ func (tk *TestKit) RefreshConnectionID() {
 func (tk *TestKit) MustGetErrCode(sql string, errCode int) {
 	_, err := tk.Exec(sql)
 	tk.require.Errorf(err, "sql: %s", sql)
+	if err != nil {
+		tk.writeError(err)
+	}
 	originErr := errors.Cause(err)
 	tErr, ok := originErr.(*terror.Error)
 	tk.require.Truef(ok, "sql: %s, expect type 'terror.Error', but obtain '%T': %v", sql, originErr, originErr)
@@ -514,6 +519,9 @@ func (tk *TestKit) MustGetErrCode(sql string, errCode int) {
 // MustGetErrMsg executes a sql statement and assert its error message.
 func (tk *TestKit) MustGetErrMsg(sql string, errStr string) {
 	err := tk.ExecToErr(sql)
+	if err != nil {
+		tk.writeError(err)
+	}
 	tk.require.EqualError(err, errStr)
 }
 
