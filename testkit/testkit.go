@@ -22,6 +22,7 @@ import (
 	"os"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -43,6 +44,7 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"go.uber.org/atomic"
+	"golang.org/x/exp/slices"
 )
 
 var testKitIDGenerator atomic.Uint64
@@ -56,6 +58,7 @@ type TestKit struct {
 	session session.Session
 	alloc   chunk.Allocator
 	file    *os.File
+	buffer  []string
 }
 
 func getTestCaseInfo() (string, string) {
@@ -81,21 +84,28 @@ func getTestCaseInfo() (string, string) {
 	panic("Should not happen")
 }
 
-func writeComment(file *os.File, comment string) {
-	_, err := file.WriteString("# " + comment + "\n")
-	if err != nil {
-		panic(err.Error())
-	}
+func (tk *TestKit) writeComment(comment string) {
+	tk.buffer = append(tk.buffer, "# "+comment+"\n")
 }
 
-func writeStatement(file *os.File, statement string) {
+func (tk *TestKit) writeStatement(statement string) {
 	if statement == "seLEct 3" || statement == "use test" {
 		return
 	}
-	_, err := file.WriteString(strings.TrimRight(statement, ";") + ";\n")
-	if err != nil {
-		panic(err)
+	tk.buffer = append(tk.buffer, strings.TrimRight(statement, ";")+";\n")
+}
+
+func (tk *TestKit) writeError(err error) {
+	if len(tk.buffer) == 0 {
+		return
 	}
+	originErr := errors.Cause(err)
+	tErr, ok := originErr.(*terror.Error)
+	if !ok {
+		panic("")
+	}
+	sqlErr := terror.ToSQLError(tErr)
+	tk.buffer = slices.Insert(tk.buffer, len(tk.buffer)-1, "-- error "+strconv.FormatUint(uint64(sqlErr.Code), 10)+"\n")
 }
 
 func stackExample() {
@@ -126,10 +136,14 @@ func NewTestKit(t testing.TB, store kv.Storage) *TestKit {
 	if err != nil {
 		panic(err)
 	}
-	writeComment(tk.file, caseName)
+	tk.writeComment(caseName)
 	tk.t.Cleanup(func() {
-		tk.file.WriteString("\n")
+		tk.buffer = append(tk.buffer, "set @@sql_mode=default;\n")
+		tk.buffer = append(tk.buffer, "\n")
 		fmt.Println("XXXXXXX file closed:", filepath)
+		for _, str := range tk.buffer {
+			tk.file.Write([]byte(str))
+		}
 		tk.file.Close()
 	})
 
@@ -175,7 +189,7 @@ func NewTestKitWithSession(t testing.TB, store kv.Storage, se session.Session) *
 		tk.file.WriteString("\n")
 		tk.file.Close()
 	})
-	writeComment(tk.file, caseName)
+	tk.writeComment(caseName)
 	return tk
 }
 
@@ -307,6 +321,7 @@ func (tk *TestKit) QueryToErr(sql string, args ...interface{}) error {
 	tk.require.NotNil(res, comment)
 	_, resErr := session.GetRows4Test(context.Background(), tk.session, res)
 	tk.require.NoError(res.Close())
+	tk.writeError(resErr)
 	return resErr
 }
 
@@ -398,7 +413,7 @@ func (tk *TestKit) Exec(sql string, args ...interface{}) (sqlexec.RecordSet, err
 // ExecWithContext executes a sql statement using the prepared stmt API
 func (tk *TestKit) ExecWithContext(ctx context.Context, sql string, args ...interface{}) (rs sqlexec.RecordSet, err error) {
 	defer tk.Session().GetSessionVars().ClearAlloc(&tk.alloc, err != nil)
-	writeStatement(tk.file, sql)
+	tk.writeStatement(sql)
 	if len(args) == 0 {
 		sc := tk.session.GetSessionVars().StmtCtx
 		prevWarns := sc.GetWarnings()
