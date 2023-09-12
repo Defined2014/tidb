@@ -140,7 +140,6 @@ func NewTestKit(t testing.TB, store kv.Storage) *TestKit {
 	}
 	tk.writeComment(caseName)
 	tk.t.Cleanup(func() {
-		tk.buffer = append(tk.buffer, "set @@sql_mode=default;\n")
 		tk.buffer = append(tk.buffer, "\n")
 		fmt.Println("XXXXXXX file closed:", filepath)
 		for _, str := range tk.buffer {
