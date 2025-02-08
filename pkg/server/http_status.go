@@ -476,6 +476,12 @@ func (s *Server) startHTTPServer() {
 }
 
 func (s *Server) startStatusServerAndRPCServer(serverMux *http.ServeMux) {
+	s.rwlock.Lock()
+	defer s.rwlock.Unlock()
+	if s.inShutdownMode.Load() {
+		return
+	}
+
 	m := cmux.New(s.statusListener)
 	// Match connections in order:
 	// First HTTP, and otherwise grpc.
