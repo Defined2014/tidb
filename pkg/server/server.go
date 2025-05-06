@@ -78,6 +78,7 @@ import (
 	"github.com/pingcap/tidb/pkg/util/timeutil"
 	uatomic "go.uber.org/atomic"
 	"go.uber.org/zap"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 )
 
@@ -116,6 +117,7 @@ const defaultCapability = mysql.ClientLongPassword | mysql.ClientLongFlag |
 
 // Server is the MySQL protocol server
 type Server struct {
+	epollFd           int
 	cfg               *config.Config
 	tlsConfig         unsafe.Pointer // *tls.Config
 	driver            IDriver
@@ -123,8 +125,9 @@ type Server struct {
 	socket            net.Listener
 	concurrentLimiter *util.TokenLimiter
 
-	rwlock  sync.RWMutex
-	clients map[uint64]*clientConn
+	rwlock    sync.RWMutex
+	clients   map[uint64]*clientConn
+	fdClients map[int]*clientConn
 
 	userResLock  sync.RWMutex // userResLock used to protect userResource
 	userResource map[string]*userResourceLimits
@@ -237,7 +240,9 @@ func (s *Server) newConn(conn net.Conn) *clientConn {
 			logutil.BgLogger().Error("failed to set tcp no delay option", zap.Error(err))
 		}
 	}
-	cc.setConn(conn)
+	reader, writer := io.Pipe()
+	cc.setConn(conn, reader)
+	cc.w = writer
 	cc.salt = fastrand.Buf(20)
 	metrics.ConnGauge.WithLabelValues(resourcegroup.DefaultResourceGroupName).Inc()
 	return cc
@@ -250,6 +255,7 @@ func NewServer(cfg *config.Config, driver IDriver) (*Server, error) {
 		driver:            driver,
 		concurrentLimiter: util.NewTokenLimiter(cfg.TokenLimit),
 		clients:           make(map[uint64]*clientConn),
+		fdClients:         make(map[int]*clientConn),
 		userResource:      make(map[string]*userResourceLimits),
 		internalSessions:  make(map[any]struct{}, 100),
 		health:            uatomic.NewBool(false),
@@ -472,83 +478,163 @@ func isClosed(ch chan struct{}) bool {
 	return false
 }
 
+func getFdFromConn(conn interface{}) int {
+	var f *os.File
+	var err error
+	switch t := conn.(type) {
+	case *net.TCPConn:
+		f, err = t.File()
+	case *net.TCPListener:
+		f, err = t.File()
+	case *net.UnixListener:
+		f, err = t.File()
+	default:
+		return -1
+	}
+	if err != nil {
+		return -1
+	}
+	return int(f.Fd())
+}
+
 func (s *Server) startNetworkListener(listener net.Listener, isUnixSocket bool, errChan chan error) {
 	if listener == nil {
 		errChan <- nil
 		return
 	}
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			if opErr, ok := err.(*net.OpError); ok {
-				if opErr.Err.Error() == "use of closed network connection" {
-					if s.inShutdownMode.Load() {
-						errChan <- nil
-					} else {
-						errChan <- err
-					}
-					return
-				}
-			}
 
-			// If we got PROXY protocol error, we should continue to accept.
-			if proxyprotocol.IsProxyProtocolError(err) {
-				logutil.BgLogger().Error("PROXY protocol failed", zap.Error(err))
+	epollFd, err := unix.EpollCreate1(unix.EPOLL_CLOEXEC)
+	if err != nil {
+		logutil.BgLogger().Error("Error creating epoll:", zap.Error(err))
+		return
+	}
+	defer unix.Close(epollFd)
+	s.epollFd = epollFd
+
+	var listenerFd int
+	if _, ok := listener.(*net.TCPListener); ok {
+		listenerFd = getFdFromConn(listener.(*net.TCPListener))
+	} else {
+		listenerFd = getFdFromConn(listener.(*net.UnixListener))
+	}
+	err = unix.EpollCtl(epollFd, unix.EPOLL_CTL_ADD, listenerFd, &unix.EpollEvent{
+		Events: unix.EPOLLIN,
+		Fd:     int32(listenerFd),
+	})
+	if err != nil {
+		logutil.BgLogger().Error("Error adding listener to epoll", zap.Error(err))
+		return
+	}
+
+	events := make([]unix.EpollEvent, 1024)
+	for {
+		n, err := unix.EpollWait(epollFd, events, -1)
+		if err != nil {
+			if err == unix.EINTR {
 				continue
 			}
-
-			logutil.BgLogger().Error("accept failed", zap.Error(err))
-			errChan <- err
-			return
+			logutil.BgLogger().Error("Error in epoll wait:", zap.Error(err))
+			break
 		}
 
-		logutil.BgLogger().Debug("accept new connection success")
+		for i := range n {
+			fd := int(events[i].Fd)
+			if fd == listenerFd {
+				conn, err := listener.Accept()
+				if err != nil {
+					if opErr, ok := err.(*net.OpError); ok {
+						if opErr.Err.Error() == "use of closed network connection" {
+							if s.inShutdownMode.Load() {
+								errChan <- nil
+							} else {
+								errChan <- err
+							}
+							return
+						}
+					}
 
-		clientConn := s.newConn(conn)
-		if isUnixSocket {
-			var (
-				uc *net.UnixConn
-				ok bool
-			)
-			if clientConn.ppEnabled {
-				// Using reflect to get Raw Conn object from proxy protocol wrapper connection object
-				ppv := reflect.ValueOf(conn)
-				vconn := ppv.Elem().FieldByName("Conn")
-				rconn := vconn.Interface()
-				uc, ok = rconn.(*net.UnixConn)
+					// If we got PROXY protocol error, we should continue to accept.
+					if proxyprotocol.IsProxyProtocolError(err) {
+						logutil.BgLogger().Error("PROXY protocol failed", zap.Error(err))
+						continue
+					}
+
+					logutil.BgLogger().Error("accept failed", zap.Error(err))
+					errChan <- err
+					return
+				}
+
+				logutil.BgLogger().Debug("accept new connection success")
+
+				clientConn := s.newConn(conn)
+				if isUnixSocket {
+					var (
+						uc *net.UnixConn
+						ok bool
+					)
+					if clientConn.ppEnabled {
+						// Using reflect to get Raw Conn object from proxy protocol wrapper connection object
+						ppv := reflect.ValueOf(conn)
+						vconn := ppv.Elem().FieldByName("Conn")
+						rconn := vconn.Interface()
+						uc, ok = rconn.(*net.UnixConn)
+					} else {
+						uc, ok = conn.(*net.UnixConn)
+					}
+					if !ok {
+						logutil.BgLogger().Error("Expected UNIX socket, but got something else")
+						return
+					}
+
+					clientConn.isUnixSocket = true
+					clientConn.peerHost = "localhost"
+					clientConn.socketCredUID, err = linux.GetSockUID(*uc)
+					if err != nil {
+						logutil.BgLogger().Error("Failed to get UNIX socket peer credentials", zap.Error(err))
+						return
+					}
+				}
+
+				err = nil
+				if !clientConn.ppEnabled {
+					// Check audit plugins when ProxyProtocol not enabled
+					err = s.checkAuditPlugin(clientConn)
+				}
+				if err != nil {
+					continue
+				}
+
+				if s.dom != nil && s.dom.IsLostConnectionToPD() {
+					logutil.BgLogger().Warn("reject connection due to lost connection to PD")
+					terror.Log(clientConn.Close())
+					continue
+				}
+
+				go s.onConn(clientConn)
 			} else {
-				uc, ok = conn.(*net.UnixConn)
+				conn := s.fdClients[fd]
+				buf := make([]byte, 4096)
+				for {
+					n, err := unix.Read(fd, buf)
+					if n > 0 {
+						wn, err := conn.w.Write(buf[:n])
+						if wn != n || err != nil {
+							logutil.BgLogger().Error("write failed", zap.Error(err))
+							break
+						}
+						continue
+					}
+					if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
+						break
+					}
+					if n == 0 || err != nil {
+						logutil.BgLogger().Error("read failed", zap.Error(err))
+						s.Kill(conn.connectionID, false, false, false)
+						break
+					}
+				}
 			}
-			if !ok {
-				logutil.BgLogger().Error("Expected UNIX socket, but got something else")
-				return
-			}
-
-			clientConn.isUnixSocket = true
-			clientConn.peerHost = "localhost"
-			clientConn.socketCredUID, err = linux.GetSockUID(*uc)
-			if err != nil {
-				logutil.BgLogger().Error("Failed to get UNIX socket peer credentials", zap.Error(err))
-				return
-			}
 		}
-
-		err = nil
-		if !clientConn.ppEnabled {
-			// Check audit plugins when ProxyProtocol not enabled
-			err = s.checkAuditPlugin(clientConn)
-		}
-		if err != nil {
-			continue
-		}
-
-		if s.dom != nil && s.dom.IsLostConnectionToPD() {
-			logutil.BgLogger().Warn("reject connection due to lost connection to PD")
-			terror.Log(clientConn.Close())
-			continue
-		}
-
-		go s.onConn(clientConn)
 	}
 }
 
@@ -636,6 +722,7 @@ func (s *Server) registerConn(conn *clientConn) bool {
 		return false
 	}
 	s.clients[conn.connectionID] = conn
+	s.fdClients[conn.fd] = conn
 	return true
 }
 
@@ -718,7 +805,27 @@ func (s *Server) onConn(conn *clientConn) {
 	}
 	defer conn.decreaseUserConnectionCount()
 
+	connFd := getFdFromConn(conn.bufReadConn.Conn.(*net.TCPConn))
+	conn.fd = connFd
+
 	if !s.registerConn(conn) {
+		return
+	}
+
+	conn.bufReadConn.SetFinishHandShake()
+
+	if err := unix.SetNonblock(connFd, true); err != nil {
+		conn.Close()
+		return
+	}
+
+	err = unix.EpollCtl(s.epollFd, unix.EPOLL_CTL_ADD, connFd, &unix.EpollEvent{
+		Events: unix.EPOLLIN | unix.EPOLLET | unix.EPOLLRDHUP,
+		Fd:     int32(connFd),
+	})
+
+	if err != nil {
+		conn.Close()
 		return
 	}
 

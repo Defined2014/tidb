@@ -160,6 +160,8 @@ func newClientConn(s *Server) *clientConn {
 // clientConn represents a connection between server and client, it maintains connection specific state,
 // handles client query.
 type clientConn struct {
+	fd           int
+	w            *io.PipeWriter
 	pkt          *internal.PacketIO      // a helper to read and write data in packet format.
 	bufReadConn  *util2.BufferedReadConn // a buffered-read net.Conn or buffered-read tls.Conn.
 	tlsConn      *tls.Conn               // TLS connection, nil if not TLS.
@@ -382,6 +384,7 @@ func (cc *clientConn) Close() error {
 
 	cc.server.rwlock.Lock()
 	delete(cc.server.clients, cc.connectionID)
+	delete(cc.server.fdClients, cc.fd)
 	cc.server.rwlock.Unlock()
 	return closeConn(cc)
 }
@@ -402,6 +405,10 @@ func closeConn(cc *clientConn) error {
 				// This is because closeConn() might be called after a connection read-timeout.
 				logutil.Logger(context.Background()).Debug("could not close connection", zap.Error(err))
 			}
+		}
+
+		if cc.w != nil {
+			cc.w.Close()
 		}
 
 		// Close statements and session
@@ -2468,8 +2475,8 @@ func (cc *clientConn) writeChunksWithFetchSize(ctx context.Context, rs resultset
 	return err
 }
 
-func (cc *clientConn) setConn(conn net.Conn) {
-	cc.bufReadConn = util2.NewBufferedReadConn(conn)
+func (cc *clientConn) setConn(conn net.Conn, reader io.Reader) {
+	cc.bufReadConn = util2.NewBufferedReadConn(conn, reader)
 	if cc.pkt == nil {
 		cc.pkt = internal.NewPacketIO(cc.bufReadConn)
 	} else {
@@ -2484,7 +2491,7 @@ func (cc *clientConn) upgradeToTLS(tlsConfig *tls.Config) error {
 	if err := tlsConn.Handshake(); err != nil {
 		return err
 	}
-	cc.setConn(tlsConn)
+	cc.setConn(tlsConn, cc.bufReadConn.Reader)
 	cc.tlsConn = tlsConn
 	return nil
 }

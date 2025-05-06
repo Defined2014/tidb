@@ -16,7 +16,9 @@ package util
 
 import (
 	"bufio"
+	"io"
 	"net"
+	"time"
 )
 
 // DefaultReaderSize is the default size of bufio.Reader.
@@ -25,18 +27,37 @@ const DefaultReaderSize = 16 * 1024
 // BufferedReadConn is a net.Conn compatible structure that reads from bufio.Reader.
 type BufferedReadConn struct {
 	net.Conn
-	rb *bufio.Reader
+	io.Reader
+	finishHandshake bool
+	rb              *bufio.Reader
 }
 
 // NewBufferedReadConn creates a BufferedReadConn.
-func NewBufferedReadConn(conn net.Conn) *BufferedReadConn {
+func NewBufferedReadConn(conn net.Conn, r io.Reader) *BufferedReadConn {
 	return &BufferedReadConn{
-		Conn: conn,
-		rb:   bufio.NewReaderSize(conn, DefaultReaderSize),
+		Conn:            conn,
+		Reader:          r,
+		finishHandshake: false,
+		rb:              bufio.NewReaderSize(r, DefaultReaderSize),
 	}
 }
 
 // Read reads data from the connection.
 func (conn BufferedReadConn) Read(b []byte) (n int, err error) {
-	return conn.rb.Read(b)
+	if conn.finishHandshake {
+		return conn.rb.Read(b)
+	}
+	return conn.Conn.Read(b)
+}
+
+// SetReadDeadline is useless for bufferedReadConn.
+func (conn BufferedReadConn) SetReadDeadline(t time.Time) error {
+	if conn.finishHandshake {
+		return nil
+	}
+	return conn.Conn.SetReadDeadline(t)
+}
+
+func (conn *BufferedReadConn) SetFinishHandShake() {
+	conn.finishHandshake = true
 }
