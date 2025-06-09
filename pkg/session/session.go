@@ -2336,6 +2336,7 @@ func runStmt(ctx context.Context, se *session, s sqlexec.Statement) (rs sqlexec.
 	}
 
 	rs, err = s.Exec(ctx)
+	se.printTelemetryLog(s.(*executor.ExecStmt))
 
 	if se.txn.Valid() && se.txn.IsPipelined() {
 		// Pipelined-DMLs can return assertion errors and write conflicts here because they flush
@@ -2377,6 +2378,23 @@ func runStmt(ctx context.Context, se *session, s sqlexec.Statement) (rs sqlexec.
 		s.(*executor.ExecStmt).FinishExecuteStmt(origTxnCtx.StartTS, err, false)
 	}
 	return nil, err
+}
+
+func (s *session) printTelemetryLog(es *executor.ExecStmt) {
+	if es.Ti == nil || s.isInternal() {
+		return
+	}
+
+	enable, err := s.GetSessionVars().GlobalVarsAccessor.GetGlobalSysVar(vardef.TiDBEnableTelemetry)
+	if err != nil || !variable.TiDBOptOn(enable) {
+		return
+	}
+
+	str, err := json.Marshal(es.Ti)
+	if err != nil || bytes.Equal(str, []byte{'{', '}'}) {
+		return
+	}
+	logutil.BgLogger().Info("TELEMTRY LOG", zap.String("original sql", es.OriginText()), zap.ByteString("detail", str))
 }
 
 // ExecStmtVarKeyType is a dummy type to avoid naming collision in context.

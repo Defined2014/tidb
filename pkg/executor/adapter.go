@@ -236,6 +236,47 @@ func (a *recordSet) OnFetchReturned() {
 	a.stmt.LogSlowQuery(a.txnStartTS, len(a.lastErrs) == 0, true)
 }
 
+// TelemetryInfo records some telemetry information during execution.
+type TelemetryInfo struct {
+	// DDL related
+	MultiSchemaChangeTelemetry *MultiSchemaChangeTelemetryInfo `json:"multi_schema_change,omitempty"`
+	UseFlashbackToCluster      *bool                           `json:"flashback_to_cluster,omitempty"`
+	CreatePartitionTelemetry   *CreatePartitionTelemetryInfo   `json:"create_partition_telemetry,omitempty"`
+	AlterPartitionTelemetry    *AlterPartitionTelemetryInfo    `json:"alter_partition_telemetry,omitempty"`
+	AccountLockTelemetry       *AccountLockTelemetryInfo       `json:"account_lock_telemetry,omitempty"`
+}
+
+// MultiSchemaChangeTelemetryInfo records multiple schema change information during execution.
+type MultiSchemaChangeTelemetryInfo struct {
+	SubJobCnt int `json:"sub_job_cnt"`
+}
+
+// CreatePartitionTelemetryInfo records create table partition telemetry information during execution.
+type CreatePartitionTelemetryInfo struct {
+	CreatePartitionType         string `json:"create_partition_type"`
+	TablePartitionColumnsCnt    int    `json:"partition_columns_cnt"`
+	TablePartitionPartitionsNum uint64 `json:"partitions_cnt"`
+	UseCreateIntervalPartition  bool   `json:"use_create_interval_syntax"`
+	GlobalIndexCnt              int    `json:"global_index_cnt"`
+}
+
+// AlterPartitionTelemetryInfo records alter table partition telemetry information during execution.
+type AlterPartitionTelemetryInfo struct {
+	UseAddIntervalPartition  bool `json:"use_add_interval_syntax"`
+	UseDropIntervalPartition bool `json:"use_drop_interval_syntax"`
+	UseReorganizePartition   bool `json:"use_reorg_partition"`
+	UseExchangePartition     bool `json:"use_exchange_partition"`
+	AddGlobalIndexCnt        int  `json:"add_global_index_cnt"`
+}
+
+// AccountLockTelemetryInfo records account lock/unlock information during execution
+type AccountLockTelemetryInfo struct {
+	// The number of CREATE/ALTER USER statements that lock the user
+	LockUser int64 `json:"lock_user_cnt"`
+	// The number of CREATE/ALTER USER statements that unlock the user
+	UnlockUser int64 `json:"unlock_user_cnt"`
+}
+
 // TryDetach creates a new `RecordSet` which doesn't depend on the current session context.
 func (a *recordSet) TryDetach() (sqlexec.RecordSet, bool, error) {
 	e, ok := Detach(a.executor)
@@ -284,6 +325,7 @@ type ExecStmt struct {
 	// OutputNames will be set if using cached plan
 	OutputNames []*types.FieldName
 	PsStmt      *plannercore.PlanCacheStmt
+	Ti          *TelemetryInfo
 }
 
 // GetStmtNode returns the stmtNode inside Statement
@@ -338,7 +380,7 @@ func (a *ExecStmt) PointGet(ctx context.Context) (*recordSet, error) {
 	}
 
 	if executor == nil {
-		b := newExecutorBuilder(a.Ctx, a.InfoSchema)
+		b := newExecutorBuilder(a.Ctx, a.InfoSchema, a.Ti)
 		executor = b.build(a.Plan)
 		if b.err != nil {
 			return nil, b.err
@@ -1230,7 +1272,7 @@ func (a *ExecStmt) buildExecutor() (exec.Executor, error) {
 		ctx.GetSessionVars().StmtCtx.Priority = kv.PriorityLow
 	}
 
-	b := newExecutorBuilder(ctx, a.InfoSchema)
+	b := newExecutorBuilder(ctx, a.InfoSchema, a.Ti)
 	e := b.build(a.Plan)
 	if b.err != nil {
 		return nil, errors.Trace(b.err)

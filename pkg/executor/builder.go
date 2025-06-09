@@ -103,6 +103,7 @@ type executorBuilder struct {
 	is      infoschema.InfoSchema
 	err     error // err is set when there is error happened during Executor building process.
 	hasLock bool
+	Ti      *TelemetryInfo
 	// isStaleness means whether this statement use stale read.
 	isStaleness      bool
 	txnScope         string
@@ -132,7 +133,7 @@ type CTEStorages struct {
 	Producer  *cteProducer
 }
 
-func newExecutorBuilder(ctx sessionctx.Context, is infoschema.InfoSchema) *executorBuilder {
+func newExecutorBuilder(ctx sessionctx.Context, is infoschema.InfoSchema, ti *TelemetryInfo) *executorBuilder {
 	txnManager := sessiontxn.GetTxnManager(ctx)
 	return &executorBuilder{
 		ctx:              ctx,
@@ -140,6 +141,7 @@ func newExecutorBuilder(ctx sessionctx.Context, is infoschema.InfoSchema) *execu
 		isStaleness:      staleread.IsStmtStaleness(ctx),
 		txnScope:         txnManager.GetTxnScope(),
 		readReplicaScope: txnManager.GetReadReplicaScope(),
+		Ti:               ti,
 	}
 }
 
@@ -150,9 +152,9 @@ type MockExecutorBuilder struct {
 }
 
 // NewMockExecutorBuilderForTest is ONLY used in test.
-func NewMockExecutorBuilderForTest(ctx sessionctx.Context, is infoschema.InfoSchema) *MockExecutorBuilder {
+func NewMockExecutorBuilderForTest(ctx sessionctx.Context, is infoschema.InfoSchema, ti *TelemetryInfo) *MockExecutorBuilder {
 	return &MockExecutorBuilder{
-		executorBuilder: newExecutorBuilder(ctx, is)}
+		executorBuilder: newExecutorBuilder(ctx, is, ti)}
 }
 
 // Build builds an executor tree according to `p`.
@@ -918,6 +920,28 @@ func (b *executorBuilder) buildSimple(v *plannercore.Simple) exec.Executor {
 		return b.buildRevoke(s)
 	case *ast.BRIEStmt:
 		return b.buildBRIE(s, v.Schema())
+	case *ast.CreateUserStmt, *ast.AlterUserStmt:
+		var lockOptions []*ast.PasswordOrLockOption
+		if b.Ti.AccountLockTelemetry == nil {
+			b.Ti.AccountLockTelemetry = &AccountLockTelemetryInfo{}
+		}
+		if stmt, ok := v.Statement.(*ast.CreateUserStmt); ok {
+			lockOptions = stmt.PasswordOrLockOptions
+		} else if stmt, ok := v.Statement.(*ast.AlterUserStmt); ok {
+			lockOptions = stmt.PasswordOrLockOptions
+		}
+		if len(lockOptions) > 0 {
+			// Multiple lock options are supported for the parser, but only the last one option takes effect.
+			for i := len(lockOptions) - 1; i >= 0; i-- {
+				if lockOptions[i].Type == ast.Lock {
+					b.Ti.AccountLockTelemetry.LockUser++
+					break
+				} else if lockOptions[i].Type == ast.Unlock {
+					b.Ti.AccountLockTelemetry.UnlockUser++
+					break
+				}
+			}
+		}
 	case *ast.CalibrateResourceStmt:
 		return &calibrateresource.Executor{
 			BaseExecutor: exec.NewBaseExecutor(b.ctx, v.Schema(), 0),
@@ -1245,7 +1269,91 @@ func (b *executorBuilder) buildRevoke(revoke *ast.RevokeStmt) exec.Executor {
 	return e
 }
 
+func (b *executorBuilder) setTelemetryInfo(v *plannercore.DDL) {
+	if v == nil || b.Ti == nil {
+		return
+	}
+	enable, err := b.ctx.GetSessionVars().GlobalVarsAccessor.GetGlobalSysVar(vardef.TiDBEnableTelemetry)
+	if err != nil || !variable.TiDBOptOn(enable) {
+		return
+	}
+	switch s := v.Statement.(type) {
+	case *ast.AlterTableStmt:
+		if len(s.Specs) > 1 {
+			b.Ti.MultiSchemaChangeTelemetry = &MultiSchemaChangeTelemetryInfo{}
+			b.Ti.MultiSchemaChangeTelemetry.SubJobCnt = len(s.Specs)
+		}
+		globalIndexCnt := 0
+		for _, spec := range s.Specs {
+			switch spec.Tp {
+			case ast.AlterTableDropFirstPartition:
+				if b.Ti.AlterPartitionTelemetry == nil {
+					b.Ti.AlterPartitionTelemetry = &AlterPartitionTelemetryInfo{}
+				}
+				b.Ti.AlterPartitionTelemetry.UseDropIntervalPartition = true
+			case ast.AlterTableAddLastPartition:
+				if b.Ti.AlterPartitionTelemetry == nil {
+					b.Ti.AlterPartitionTelemetry = &AlterPartitionTelemetryInfo{}
+				}
+				b.Ti.AlterPartitionTelemetry.UseAddIntervalPartition = true
+			case ast.AlterTableExchangePartition:
+				if b.Ti.AlterPartitionTelemetry == nil {
+					b.Ti.AlterPartitionTelemetry = &AlterPartitionTelemetryInfo{}
+				}
+				b.Ti.AlterPartitionTelemetry.UseExchangePartition = true
+			case ast.AlterTableReorganizePartition:
+				if b.Ti.AlterPartitionTelemetry == nil {
+					b.Ti.AlterPartitionTelemetry = &AlterPartitionTelemetryInfo{}
+				}
+				b.Ti.AlterPartitionTelemetry.UseReorganizePartition = true
+			case ast.AlterTableAddConstraint:
+				if b.Ti.AlterPartitionTelemetry == nil {
+					b.Ti.AlterPartitionTelemetry = &AlterPartitionTelemetryInfo{}
+				}
+				if spec.Constraint != nil && spec.Constraint.Option != nil && spec.Constraint.Option.Global {
+					globalIndexCnt++
+				}
+			}
+		}
+		if globalIndexCnt != 0 {
+			b.Ti.AlterPartitionTelemetry.AddGlobalIndexCnt = globalIndexCnt
+		}
+	case *ast.CreateTableStmt:
+		if s.Partition == nil {
+			break
+		}
+
+		p := s.Partition
+		if b.Ti.CreatePartitionTelemetry == nil {
+			b.Ti.CreatePartitionTelemetry = &CreatePartitionTelemetryInfo{}
+		}
+		b.Ti.CreatePartitionTelemetry.TablePartitionPartitionsNum = max(p.Num, uint64(len(p.Definitions)))
+		b.Ti.CreatePartitionTelemetry.CreatePartitionType = p.Tp.String()
+		if len(p.ColumnNames) == 0 {
+			b.Ti.CreatePartitionTelemetry.TablePartitionColumnsCnt = 1
+		} else {
+			b.Ti.CreatePartitionTelemetry.TablePartitionColumnsCnt = len(p.ColumnNames)
+		}
+		if p.Interval != nil {
+			b.Ti.CreatePartitionTelemetry.UseCreateIntervalPartition = true
+		}
+
+		globalIndexCnt := 0
+		for _, c := range s.Constraints {
+			if c.Option != nil && c.Option.Global {
+				globalIndexCnt++
+			}
+		}
+		b.Ti.CreatePartitionTelemetry.GlobalIndexCnt = globalIndexCnt
+
+	case *ast.FlashBackToTimestampStmt:
+		t := true
+		b.Ti.UseFlashbackToCluster = &t
+	}
+}
+
 func (b *executorBuilder) buildDDL(v *plannercore.DDL) exec.Executor {
+	b.setTelemetryInfo(v)
 	e := &DDLExec{
 		BaseExecutor: exec.NewBaseExecutor(b.ctx, v.Schema(), v.ID()),
 		ddlExecutor:  domain.GetDomain(b.ctx).DDLExecutor(),
