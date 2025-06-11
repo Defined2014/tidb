@@ -103,6 +103,7 @@ import (
 	"github.com/pingcap/tidb/pkg/table/tblsession"
 	"github.com/pingcap/tidb/pkg/table/temptable"
 	"github.com/pingcap/tidb/pkg/tablecodec"
+	"github.com/pingcap/tidb/pkg/telemetry"
 	"github.com/pingcap/tidb/pkg/ttl/ttlworker"
 	"github.com/pingcap/tidb/pkg/util"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -2394,10 +2395,7 @@ func (s *session) printTelemetryLog(es *executor.ExecStmt) {
 	if err != nil || bytes.Equal(str, []byte{'{', '}'}) {
 		return
 	}
-	logutil.BgLogger().With(zap.String(logutil.LogFieldCategory, "telemetry")).Info(
-		"ddl event",
-		zap.String("original sql", es.OriginText()),
-		zap.ByteString("detail", str))
+	telemetry.Logger().Info("ddl event", zap.String("original sql", es.OriginText()), zap.ByteString("detail", str))
 }
 
 // ExecStmtVarKeyType is a dummy type to avoid naming collision in context.

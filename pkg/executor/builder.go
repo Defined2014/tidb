@@ -75,6 +75,7 @@ import (
 	"github.com/pingcap/tidb/pkg/table"
 	"github.com/pingcap/tidb/pkg/table/tables"
 	"github.com/pingcap/tidb/pkg/table/temptable"
+	"github.com/pingcap/tidb/pkg/telemetry"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -103,7 +104,7 @@ type executorBuilder struct {
 	is      infoschema.InfoSchema
 	err     error // err is set when there is error happened during Executor building process.
 	hasLock bool
-	Ti      *TelemetryInfo
+	Ti      *telemetry.TelemetryInfo
 	// isStaleness means whether this statement use stale read.
 	isStaleness      bool
 	txnScope         string
@@ -133,7 +134,7 @@ type CTEStorages struct {
 	Producer  *cteProducer
 }
 
-func newExecutorBuilder(ctx sessionctx.Context, is infoschema.InfoSchema, ti *TelemetryInfo) *executorBuilder {
+func newExecutorBuilder(ctx sessionctx.Context, is infoschema.InfoSchema, ti *telemetry.TelemetryInfo) *executorBuilder {
 	txnManager := sessiontxn.GetTxnManager(ctx)
 	return &executorBuilder{
 		ctx:              ctx,
@@ -152,7 +153,7 @@ type MockExecutorBuilder struct {
 }
 
 // NewMockExecutorBuilderForTest is ONLY used in test.
-func NewMockExecutorBuilderForTest(ctx sessionctx.Context, is infoschema.InfoSchema, ti *TelemetryInfo) *MockExecutorBuilder {
+func NewMockExecutorBuilderForTest(ctx sessionctx.Context, is infoschema.InfoSchema, ti *telemetry.TelemetryInfo) *MockExecutorBuilder {
 	return &MockExecutorBuilder{
 		executorBuilder: newExecutorBuilder(ctx, is, ti)}
 }
@@ -923,7 +924,7 @@ func (b *executorBuilder) buildSimple(v *plannercore.Simple) exec.Executor {
 	case *ast.CreateUserStmt, *ast.AlterUserStmt:
 		var lockOptions []*ast.PasswordOrLockOption
 		if b.Ti.AccountLockTelemetry == nil {
-			b.Ti.AccountLockTelemetry = &AccountLockTelemetryInfo{}
+			b.Ti.AccountLockTelemetry = &telemetry.AccountLockTelemetryInfo{}
 		}
 		if stmt, ok := v.Statement.(*ast.CreateUserStmt); ok {
 			lockOptions = stmt.PasswordOrLockOptions
@@ -1280,7 +1281,7 @@ func (b *executorBuilder) setTelemetryInfo(v *plannercore.DDL) {
 	switch s := v.Statement.(type) {
 	case *ast.AlterTableStmt:
 		if len(s.Specs) > 1 {
-			b.Ti.MultiSchemaChangeTelemetry = &MultiSchemaChangeTelemetryInfo{}
+			b.Ti.MultiSchemaChangeTelemetry = &telemetry.MultiSchemaChangeTelemetryInfo{}
 			b.Ti.MultiSchemaChangeTelemetry.SubJobCnt = len(s.Specs)
 		}
 		globalIndexCnt := 0
@@ -1288,27 +1289,27 @@ func (b *executorBuilder) setTelemetryInfo(v *plannercore.DDL) {
 			switch spec.Tp {
 			case ast.AlterTableDropFirstPartition:
 				if b.Ti.AlterPartitionTelemetry == nil {
-					b.Ti.AlterPartitionTelemetry = &AlterPartitionTelemetryInfo{}
+					b.Ti.AlterPartitionTelemetry = &telemetry.AlterPartitionTelemetryInfo{}
 				}
 				b.Ti.AlterPartitionTelemetry.UseDropIntervalPartition = true
 			case ast.AlterTableAddLastPartition:
 				if b.Ti.AlterPartitionTelemetry == nil {
-					b.Ti.AlterPartitionTelemetry = &AlterPartitionTelemetryInfo{}
+					b.Ti.AlterPartitionTelemetry = &telemetry.AlterPartitionTelemetryInfo{}
 				}
 				b.Ti.AlterPartitionTelemetry.UseAddIntervalPartition = true
 			case ast.AlterTableExchangePartition:
 				if b.Ti.AlterPartitionTelemetry == nil {
-					b.Ti.AlterPartitionTelemetry = &AlterPartitionTelemetryInfo{}
+					b.Ti.AlterPartitionTelemetry = &telemetry.AlterPartitionTelemetryInfo{}
 				}
 				b.Ti.AlterPartitionTelemetry.UseExchangePartition = true
 			case ast.AlterTableReorganizePartition:
 				if b.Ti.AlterPartitionTelemetry == nil {
-					b.Ti.AlterPartitionTelemetry = &AlterPartitionTelemetryInfo{}
+					b.Ti.AlterPartitionTelemetry = &telemetry.AlterPartitionTelemetryInfo{}
 				}
 				b.Ti.AlterPartitionTelemetry.UseReorganizePartition = true
 			case ast.AlterTableAddConstraint:
 				if b.Ti.AlterPartitionTelemetry == nil {
-					b.Ti.AlterPartitionTelemetry = &AlterPartitionTelemetryInfo{}
+					b.Ti.AlterPartitionTelemetry = &telemetry.AlterPartitionTelemetryInfo{}
 				}
 				if spec.Constraint != nil && spec.Constraint.Option != nil && spec.Constraint.Option.Global {
 					globalIndexCnt++
@@ -1325,7 +1326,7 @@ func (b *executorBuilder) setTelemetryInfo(v *plannercore.DDL) {
 
 		p := s.Partition
 		if b.Ti.CreatePartitionTelemetry == nil {
-			b.Ti.CreatePartitionTelemetry = &CreatePartitionTelemetryInfo{}
+			b.Ti.CreatePartitionTelemetry = &telemetry.CreatePartitionTelemetryInfo{}
 		}
 		b.Ti.CreatePartitionTelemetry.TablePartitionPartitionsNum = max(p.Num, uint64(len(p.Definitions)))
 		b.Ti.CreatePartitionTelemetry.CreatePartitionType = p.Tp.String()

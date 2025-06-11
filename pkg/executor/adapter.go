@@ -59,6 +59,7 @@ import (
 	"github.com/pingcap/tidb/pkg/sessionctx/variable"
 	"github.com/pingcap/tidb/pkg/sessiontxn"
 	"github.com/pingcap/tidb/pkg/sessiontxn/staleread"
+	"github.com/pingcap/tidb/pkg/telemetry"
 	"github.com/pingcap/tidb/pkg/types"
 	util2 "github.com/pingcap/tidb/pkg/util"
 	"github.com/pingcap/tidb/pkg/util/breakpoint"
@@ -236,47 +237,6 @@ func (a *recordSet) OnFetchReturned() {
 	a.stmt.LogSlowQuery(a.txnStartTS, len(a.lastErrs) == 0, true)
 }
 
-// TelemetryInfo records some telemetry information during execution.
-type TelemetryInfo struct {
-	// DDL related
-	MultiSchemaChangeTelemetry *MultiSchemaChangeTelemetryInfo `json:"multi_schema_change,omitempty"`
-	UseFlashbackToCluster      *bool                           `json:"flashback_to_cluster,omitempty"`
-	CreatePartitionTelemetry   *CreatePartitionTelemetryInfo   `json:"create_partition_telemetry,omitempty"`
-	AlterPartitionTelemetry    *AlterPartitionTelemetryInfo    `json:"alter_partition_telemetry,omitempty"`
-	AccountLockTelemetry       *AccountLockTelemetryInfo       `json:"account_lock_telemetry,omitempty"`
-}
-
-// MultiSchemaChangeTelemetryInfo records multiple schema change information during execution.
-type MultiSchemaChangeTelemetryInfo struct {
-	SubJobCnt int `json:"sub_job_cnt"`
-}
-
-// CreatePartitionTelemetryInfo records create table partition telemetry information during execution.
-type CreatePartitionTelemetryInfo struct {
-	CreatePartitionType         string `json:"create_partition_type"`
-	TablePartitionColumnsCnt    int    `json:"partition_columns_cnt"`
-	TablePartitionPartitionsNum uint64 `json:"partitions_cnt"`
-	UseCreateIntervalPartition  bool   `json:"use_create_interval_syntax"`
-	GlobalIndexCnt              int    `json:"global_index_cnt"`
-}
-
-// AlterPartitionTelemetryInfo records alter table partition telemetry information during execution.
-type AlterPartitionTelemetryInfo struct {
-	UseAddIntervalPartition  bool `json:"use_add_interval_syntax"`
-	UseDropIntervalPartition bool `json:"use_drop_interval_syntax"`
-	UseReorganizePartition   bool `json:"use_reorg_partition"`
-	UseExchangePartition     bool `json:"use_exchange_partition"`
-	AddGlobalIndexCnt        int  `json:"add_global_index_cnt"`
-}
-
-// AccountLockTelemetryInfo records account lock/unlock information during execution
-type AccountLockTelemetryInfo struct {
-	// The number of CREATE/ALTER USER statements that lock the user
-	LockUser int64 `json:"lock_user_cnt"`
-	// The number of CREATE/ALTER USER statements that unlock the user
-	UnlockUser int64 `json:"unlock_user_cnt"`
-}
-
 // TryDetach creates a new `RecordSet` which doesn't depend on the current session context.
 func (a *recordSet) TryDetach() (sqlexec.RecordSet, bool, error) {
 	e, ok := Detach(a.executor)
@@ -325,7 +285,7 @@ type ExecStmt struct {
 	// OutputNames will be set if using cached plan
 	OutputNames []*types.FieldName
 	PsStmt      *plannercore.PlanCacheStmt
-	Ti          *TelemetryInfo
+	Ti          *telemetry.TelemetryInfo
 }
 
 // GetStmtNode returns the stmtNode inside Statement
