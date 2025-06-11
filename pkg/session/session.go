@@ -2394,7 +2394,10 @@ func (s *session) printTelemetryLog(es *executor.ExecStmt) {
 	if err != nil || bytes.Equal(str, []byte{'{', '}'}) {
 		return
 	}
-	logutil.BgLogger().Info("TELEMTRY LOG", zap.String("original sql", es.OriginText()), zap.ByteString("detail", str))
+	logutil.BgLogger().With(zap.String(logutil.LogFieldCategory, "telemetry")).Info(
+		"ddl event",
+		zap.String("original sql", es.OriginText()),
+		zap.ByteString("detail", str))
 }
 
 // ExecStmtVarKeyType is a dummy type to avoid naming collision in context.
